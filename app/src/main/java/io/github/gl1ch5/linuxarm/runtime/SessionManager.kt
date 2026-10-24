@@ -30,7 +30,7 @@ class SessionManager(
     private val distros: DistroRepository,
     private val drivers: DriverManager,
 ) {
-    data class Running(val distroId: String, val gpu: String)
+    data class Running(val distroId: String, val gpu: String, val useGpu: Boolean = false)
 
     private val proot = Proot(paths)
     val xserver = XServer(context)
@@ -142,7 +142,7 @@ class SessionManager(
         val cmd = proot.command(id, env, listOf("/bin/sh", SESSION_SCRIPT), setup.binds)
         val p = Processes.start("session-$id", cmd, proot.hostEnv(), "session-$id.log")
         session = p
-        _running.value = Running(id, gpuLabel)
+        _running.value = Running(id, gpuLabel, useGpu)
         distros.setStatus(id, DistroStatus.Running)
 
         Thread {
@@ -166,8 +166,19 @@ class SessionManager(
         f.setExecutable(true, false)
     }
 
+    /** Starts [command] inside the running session (from a gesture or an on-screen button). */
+    fun launchInGuest(command: String): Boolean {
+        val r = _running.value ?: return false
+        val inst = distros.installed.value[r.distroId] ?: return false
+        val setup = guestSetup(r.distroId, inst, distros.config(r.distroId), ":0", r.useGpu)
+        val cmd = proot.command(r.distroId, setup.env, listOf("/bin/sh", "-c", command), setup.binds)
+        runCatching { Processes.start("cmd", cmd, proot.hostEnv(), "session-${r.distroId}.log") }
+            .onFailure { AppLog.e("launchInGuest failed", it); return false }
+        return true
+    }
+
     fun openDisplay() {
-        val i = Intent().setClassName(context, "com.termux.x11.MainActivity")
+        val i = Intent(context, io.github.gl1ch5.linuxarm.display.DisplayActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
         runCatching { context.startActivity(i) }.onFailure { AppLog.e("cannot open display", it) }
     }
@@ -192,10 +203,8 @@ class SessionManager(
         logcat?.destroy(); logcat = null
         _running.value = null
         if (r != null) distros.setStatus(r.distroId, DistroStatus.Installed)
-        // Close the display activity if it is open.
-        runCatching {
-            context.sendBroadcast(Intent("com.termux.x11.ACTION_STOP").setPackage(context.packageName))
-        }
+        // Close the display (not via Termux:X11's ACTION_STOP: that finishes the whole task).
+        io.github.gl1ch5.linuxarm.display.DisplayActivity.finishCurrent()
     }
 
     companion object {

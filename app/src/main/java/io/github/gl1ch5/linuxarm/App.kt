@@ -22,6 +22,7 @@ class App : LorieApp() {
     lateinit var distros: DistroRepository
     lateinit var drivers: DriverManager
     lateinit var sessions: SessionManager
+    lateinit var controls: io.github.gl1ch5.linuxarm.controls.ControlsRepository
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
@@ -39,14 +40,14 @@ class App : LorieApp() {
         distros = DistroRepository(paths).also { it.load() }
         drivers = DriverManager(paths).also { it.load() }
         sessions = SessionManager(this, paths, distros, drivers)
+        controls = io.github.gl1ch5.linuxarm.controls.ControlsRepository(java.io.File(paths.config, "controls.json"))
         registerActivityLifecycleCallbacks(RefreshRateApplier())
     }
 
     /** Applies the running distro's refresh rate preference to the X display activity. */
     private inner class RefreshRateApplier : ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: Activity) {
-            // Compared by name: the display activity's AppCompat supertype is not on our compile classpath.
-            if (!activity.javaClass.name.startsWith("com.termux.x11.MainActivity")) return
+            if (activity !is io.github.gl1ch5.linuxarm.display.DisplayActivity) return
             val id = sessions.running.value?.distroId ?: return
             val want = distros.config(id).refreshRate
             val display: Display = activity.display ?: return

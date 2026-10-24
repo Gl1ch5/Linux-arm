@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -51,6 +52,7 @@ private data class Tab(val route: String, val label: String, val icon: androidx.
 private val tabs = listOf(
     Tab("home", "Дистрибутивы", Icons.Filled.Computer),
     Tab("drivers", "Драйверы", Icons.Filled.Memory),
+    Tab("controls", "Управление", Icons.Filled.Gamepad),
     Tab("logs", "Логи", Icons.Filled.Article),
 )
 
@@ -85,6 +87,7 @@ fun AppRoot() {
             composable("home") { HomeScreen(nav, snackbar) }
             composable("drivers") { DriversScreen(snackbar) }
             composable("logs") { LogsScreen() }
+            composable("controls") { ControlsScreen() }
             composable("distro/{id}") { DistroSettingsScreen(nav, it.arguments?.getString("id") ?: "") }
             composable("diagnostics/{id}") { DiagnosticsScreen(nav, it.arguments?.getString("id") ?: "") }
         }

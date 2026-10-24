@@ -103,6 +103,9 @@ androidComponents {
 
 dependencies {
     implementation(project(":lorie"))
+    // DisplayActivity extends Termux:X11's AppCompat-based activity.
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.preference:preference:1.2.1")
 
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)

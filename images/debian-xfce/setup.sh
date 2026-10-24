@@ -43,6 +43,34 @@ cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml <<'XML'
 </channel>
 XML
 
+# Phone scale: larger fonts (DPI), bigger panel, icons and cursor.
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Xft" type="empty">
+    <property name="DPI" type="int" value="168"/>
+    <property name="Antialias" type="int" value="1"/>
+    <property name="HintStyle" type="string" value="hintslight"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="CursorThemeSize" type="int" value="48"/>
+  </property>
+</channel>
+XML
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-desktop" version="1.0">
+  <property name="desktop-icons" type="empty">
+    <property name="icon-size" type="uint" value="64"/>
+  </property>
+</channel>
+XML
+# Bigger default panel (applied when the panel creates its first config).
+if [ -f /etc/xdg/xfce4/panel/default.xml ]; then
+    sed -i 's|name="size" type="uint" value="[0-9]*"|name="size" type="uint" value="48"|g; s|name="icon-size" type="uint" value="[0-9]*"|name="icon-size" type="uint" value="0"|g' /etc/xdg/xfce4/panel/default.xml
+fi
+echo 'Xcursor.size: 48' > /root/.Xresources
+
 # Handy test launchers on the desktop.
 mkdir -p /root/Desktop
 cat > /root/Desktop/vkcube.desktop <<'DESK'
