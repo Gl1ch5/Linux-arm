@@ -1,0 +1,170 @@
+#!/bin/bash
+# GNOME 48 session for Linux ARM (X11 on Termux:X11, no systemd, no logind).
+# Started by session.sh inside dbus-run-session, as LA_LAUNCH. Every line starts with [gnome].
+#
+# Plan:
+#   1. gnome-session with the X11 session file (gnome-session 48 still has its builtin
+#      service manager; gnome-shell uses its dummy login manager without /run/systemd/seats).
+#   2. If gnome-session fails, fall back to gnome-shell --x11 with the settings daemon
+#      started by hand. A clean logout (exit 0) does not trigger the fallback.
+# Set LA_GNOME_DEBUG=1 for verbose gnome-session output.
+
+log()  { echo "[gnome] $*"; }
+warn() { echo "[gnome] WARNING: $*"; }
+
+pkgver() { dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo "missing"; }
+
+# Re-run inside a session bus if the caller did not provide one.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -z "${LA_GNOME_REEXEC:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    export LA_GNOME_REEXEC=1
+    log "no session bus, starting one with dbus-run-session"
+    exec dbus-run-session -- "$0" "$@"
+fi
+
+# Desktop identity. XDG_SESSION_TYPE and the backend variables keep GTK and Clutter on X11.
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_DESKTOP=gnome
+export DESKTOP_SESSION=gnome
+export XDG_SESSION_TYPE=x11
+export XDG_SESSION_CLASS=user
+export GNOME_SHELL_SESSION_MODE=user
+export GDK_BACKEND=x11
+export CLUTTER_BACKEND=x11
+unset WAYLAND_DISPLAY
+export DISPLAY="${DISPLAY:-:0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-root}"
+if mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"; then :; else
+    warn "cannot create $XDG_RUNTIME_DIR"
+fi
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    log "distro: ${PRETTY_NAME:-unknown}"
+fi
+log "packages: gnome-session=$(pkgver gnome-session-bin) gnome-shell=$(pkgver gnome-shell) gnome-settings-daemon=$(pkgver gnome-settings-daemon)"
+log "session bus: ${DBUS_SESSION_BUS_ADDRESS:-<none>}"
+
+if [ -e /run/systemd/seats ]; then
+    log "logind: systemd present (/run/systemd/seats)"
+else
+    log "logind: absent, gnome-shell uses its dummy login manager"
+fi
+if [ -d /run/systemd/system ]; then
+    log "systemd: /run/systemd/system present (unexpected in this guest)"
+else
+    log "systemd: not running, gnome-session uses its builtin service manager"
+fi
+
+# Wait for the X server. The app starts it before the guest, but the socket can lag.
+display_num="${DISPLAY#:}"
+display_num="${display_num%%.*}"
+x_socket="/tmp/.X11-unix/X${display_num}"
+i=0
+while [ ! -S "$x_socket" ] && [ "$i" -lt 60 ]; do
+    sleep 0.5
+    i=$((i + 1))
+done
+if [ ! -S "$x_socket" ]; then
+    warn "X socket $x_socket not found after 30 s. GNOME cannot start without an X server."
+    exit 1
+fi
+log "X server ready: DISPLAY=$DISPLAY ($x_socket)"
+
+# Mutter's X11 backend needs these extensions. A missing one is the first thing to check.
+xdpyinfo_out="$(timeout 5 xdpyinfo 2>/dev/null || true)"
+if [ -z "$xdpyinfo_out" ]; then
+    warn "xdpyinfo gave no output; cannot check X extensions"
+else
+    missing=""
+    for ext in Composite DAMAGE DRI3 Present RANDR SHAPE SYNC XFIXES XInputExtension XKEYBOARD MIT-SHM RENDER GLX; do
+        if ! printf '%s\n' "$xdpyinfo_out" | grep -qE "^[[:space:]]+${ext}([[:space:]]|\$)"; then
+            missing="$missing $ext"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        warn "X extensions not reported by the server:$missing"
+    else
+        log "X extensions: all required present"
+    fi
+fi
+
+# OpenGL: GNOME Shell needs a working GL context. llvmpipe means no hardware acceleration.
+glx_out="$(timeout 10 glxinfo -B 2>/dev/null || true)"
+renderer="$(printf '%s\n' "$glx_out" | sed -n 's/^OpenGL renderer string: //p')"
+version="$(printf '%s\n' "$glx_out" | sed -n 's/^OpenGL version string: //p')"
+if [ -n "$renderer" ]; then
+    log "OpenGL renderer: $renderer"
+    log "OpenGL version: ${version:-unknown}"
+    case "$renderer" in
+        *llvmpipe*) warn "software rendering (llvmpipe): GNOME will be slow; check the GPU driver in the app" ;;
+    esac
+else
+    warn "glxinfo reported no OpenGL renderer; gnome-shell will probably fail"
+fi
+
+# Pick the X11 session definition, if this Debian build has one.
+session=""
+for name in gnome-xorg gnome; do
+    for dir in /usr/share/gnome-session/sessions /etc/gnome-session/sessions /usr/local/share/gnome-session/sessions; do
+        if [ -f "$dir/$name.session" ]; then
+            session="$name"
+            break 2
+        fi
+    done
+done
+if [ -z "$session" ]; then
+    warn "no gnome-session .session file found; using 'gnome'. Available:"
+    ls /usr/share/gnome-session/sessions 2>/dev/null | sed 's/^/[gnome]   /' || true
+    session="gnome"
+fi
+log "gnome-session session: $session"
+
+# Fallback helpers. Kill leftovers of a failed session before starting over.
+run_shell() {
+    log "starting gnome-shell --x11 --replace"
+    gnome-shell --x11 --replace
+    rc=$?
+    if [ "$rc" -ne 0 ] && [ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ]; then
+        warn "gnome-shell exited with code $rc; retrying with software OpenGL (slow, but avoids driver faults)"
+        LIBGL_ALWAYS_SOFTWARE=1 gnome-shell --x11 --replace
+        rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        warn "gnome-shell did not start (exit $rc). Look above for GL/GLX errors, 'Failed to', or 'org.gnome.Shell'."
+        warn "Send session-<id>.log, xserver.log and logcat.log from the app's Logs tab."
+    fi
+    return "$rc"
+}
+
+run_fallback() {
+    warn "falling back to gnome-shell without gnome-session"
+    pkill -x gnome-session-b 2>/dev/null || true
+    pkill -x gnome-shell 2>/dev/null || true
+    if command -v gnome-settings-daemon >/dev/null 2>&1; then
+        gnome-settings-daemon --replace >/dev/null 2>&1 &
+        log "gnome-settings-daemon started by hand (pid $!)"
+    else
+        warn "gnome-settings-daemon not installed: no keyboard layouts, fonts or scaling settings"
+    fi
+    if [ -x /usr/libexec/at-spi-bus-launcher ]; then
+        /usr/libexec/at-spi-bus-launcher --launch-immediately >/dev/null 2>&1 &
+    fi
+    run_shell
+}
+
+log "starting gnome-session --session=$session"
+if [ -n "${LA_GNOME_DEBUG:-}" ]; then
+    gnome-session --session="$session" --debug
+else
+    gnome-session --session="$session"
+fi
+rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    log "gnome-session ended normally (exit 0)"
+    exit 0
+fi
+
+warn "gnome-session exited with code $rc"
+run_fallback
+exit $?

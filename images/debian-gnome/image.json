@@ -1,0 +1,10 @@
+{
+  "id": "debian-gnome",
+  "name": "GNOME",
+  "description": "Debian 13 с GNOME 48 в сессии X11. Экспериментально: без systemd и logind часть функций работает с ограничениями (см. docs/gnome.md).",
+  "libc": "glibc",
+  "session_type": "x11",
+  "launch_command": "/usr/local/bin/la-gnome-session",
+  "accent": "#4A86CF",
+  "base_image": "debian:trixie-slim"
+}
