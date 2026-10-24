@@ -23,7 +23,14 @@ if [ -f "$dir/prepare.sh" ]; then
 fi
 
 docker rm -f "$name" >/dev/null 2>&1 || true
-docker pull --platform linux/arm64 "$base_image"
+if [ "$base_image" = "local:rootfs" ]; then
+    # prepare.sh produced the base filesystem itself.
+    base_image="la-base-$id:latest"
+    docker import --platform linux/arm64 "$cache/rootfs.tar.xz" "$base_image"
+    rm -f "$cache/rootfs.tar.xz"
+else
+    docker pull --platform linux/arm64 "$base_image"
+fi
 docker create --platform linux/arm64 --name "$name" \
     -v "$dir:/la-build/image:ro" -v "$here/common:/la-build/common:ro" -v "$cache:/la-build/cache:ro" \
     "$base_image" /bin/sh -c 'if command -v bash >/dev/null; then exec bash /la-build/image/setup.sh; else exec sh /la-build/image/setup.sh; fi' >/dev/null

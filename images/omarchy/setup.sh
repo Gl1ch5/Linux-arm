@@ -53,40 +53,9 @@ harden_pacman_conf() {
 [[ "$(uname -m)" == aarch64 ]] || die "the image must be built natively on arm64 (uname -m: $(uname -m))"
 df -h / || true
 
-# 1+2. The bundle is downloaded on the CI host by prepare.sh (installing curl into the old
-#      base image would be a partial Arch upgrade and breaks libcurl). Check its pinned
-#      sha256 again before anything is extracted.
-bundle=/la-build/cache/bundle.tar
-[[ -f "$bundle" ]] || die "missing $bundle (prepare.sh did not run?)"
-echo "$BUNDLE_SHA256  $bundle" | sha256sum -c - || die "bundle sha256 does not match the pinned release"
-log "bundle sha256 verified"
-
-# 3. Check the bundle manifest: format, architecture and version.
-manifest="$(tar -xOf "$bundle" "$BUNDLE_MANIFEST_MEMBER")" || die "bundle has no $BUNDLE_MANIFEST_MEMBER"
-manifest_value() { awk -F= -v key="$1" '$1 == key { print $2; exit }' <<<"$manifest"; }
-[[ "$(manifest_value format)" == 1 ]] || die "unsupported bundle format: $(manifest_value format)"
-[[ "$(manifest_value architecture)" == aarch64 ]] || die "bundle is not aarch64"
-[[ "$(manifest_value version)" == "$BUNDLE_VERSION" ]] || die "bundle version is $(manifest_value version), expected $BUNDLE_VERSION"
-
-# 4. Replace the root filesystem. The rootfs is streamed straight from the bundle into /,
-#    so the uncompressed copy never exists twice on disk.
-#    --anchored: exclusions match from the archive root only (usr/share/dev is kept).
-#    Default overwrite: GNU tar unlinks each existing file before creating it, so running
-#    binaries and libraries are replaced without "text file busy" errors.
-#    Docker-managed /etc/hosts, /etc/hostname, /etc/resolv.conf and the mount points are kept.
-log "replacing the root filesystem with the Arch Linux ARM rootfs of $BUNDLE_VERSION"
-tar -xOf "$bundle" "$ROOTFS_MEMBER" \
-  | tar -C / -xJpf - --numeric-owner --anchored \
-      --exclude=dev --exclude=./dev \
-      --exclude=proc --exclude=./proc \
-      --exclude=sys --exclude=./sys \
-      --exclude=la-build --exclude=./la-build \
-      --exclude=.dockerenv --exclude=./.dockerenv \
-      --exclude=etc/hosts --exclude=./etc/hosts \
-      --exclude=etc/hostname --exclude=./etc/hostname \
-      --exclude=etc/resolv.conf --exclude=./etc/resolv.conf \
-  || die "extracting the rootfs failed; the build output must be discarded"
-ldconfig
+# 1-4. prepare.sh (on the CI host) downloaded the pinned omarchy-android bundle, verified
+#      its sha256 and manifest, and the bundle's rootfs.tar.xz became this container's
+#      image (docker import). So this script already runs inside the Omarchy rootfs.
 
 # 5. Check that the rootfs is the expected one before building on top of it.
 for path in \
