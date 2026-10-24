@@ -76,11 +76,11 @@ val LocalActivityRoute = androidx.compose.runtime.staticCompositionLocalOf<Strin
 private data class Tab(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 
 private val tabs = listOf(
-    Tab("home", "Дистрибутивы", Icons.Filled.Computer),
+    Tab("home", "Linux", Icons.Filled.Computer),
     Tab("drivers", "Драйверы", Icons.Filled.Memory),
-    Tab("controls", "Управление", Icons.Filled.Gamepad),
+    Tab("controls", "Жесты", Icons.Filled.Gamepad),
     Tab("logs", "Логи", Icons.Filled.Article),
-    Tab("updates", "Обновления", Icons.Filled.SystemUpdate),
+    Tab("updates", "Версии", Icons.Filled.SystemUpdate),
 )
 
 @Composable
@@ -110,7 +110,7 @@ fun AppRoot() {
                                 if (tab.route == "updates" && hasUpdate) BadgedBox(badge = { Badge() }) { Icon(tab.icon, null) }
                                 else Icon(tab.icon, null)
                             },
-                            label = { Text(tab.label) },
+                            label = { Text(tab.label, maxLines = 1, softWrap = false, style = androidx.compose.material3.MaterialTheme.typography.labelMedium) },
                         )
                     }
                 }

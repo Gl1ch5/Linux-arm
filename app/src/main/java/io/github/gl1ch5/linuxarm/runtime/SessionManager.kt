@@ -210,7 +210,11 @@ class SessionManager(
         _running.value = null
         if (r != null) distros.setStatus(r.distroId, DistroStatus.Installed)
         // Close the display (not via Termux:X11's ACTION_STOP: that finishes the whole task).
-        io.github.gl1ch5.linuxarm.display.DisplayActivity.finishCurrent()
+        // On the main thread: loading the activity class runs Termux:X11's static
+        // initializer, which creates a Handler and crashes on threads without a Looper.
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            io.github.gl1ch5.linuxarm.display.DisplayActivity.finishCurrent()
+        }
     }
 
     companion object {
