@@ -1,0 +1,171 @@
+name: build-turnip
+
+# Daily Mesa Turnip builds for KGSL (Adreno on Android kernels), glibc and musl,
+# from the latest Mesa release tag (stable) and from main (nightly).
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      channels:
+        description: 'Каналы через пробел (stable nightly)'
+        default: 'stable nightly'
+      force:
+        description: 'Собрать, даже если такой коммит уже собран'
+        type: boolean
+        default: false
+  push:
+    paths: ['drivers/turnip/**', '.github/workflows/build-turnip.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: turnip
+  cancel-in-progress: false
+
+env:
+  MESA_GIT: https://gitlab.freedesktop.org/mesa/mesa.git
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      any: ${{ steps.resolve.outputs.any }}
+    steps:
+      - name: Resolve Mesa revisions
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHANNELS: ${{ inputs.channels || 'stable nightly' }}
+          FORCE: ${{ inputs.force || github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          entries=()
+          for channel in $CHANNELS; do
+            case "$channel" in
+              stable)
+                tag=$(git ls-remote --tags --refs "$MESA_GIT" 'mesa-*' | awk '{print $2}' | sed 's|refs/tags/||' \
+                      | grep -E '^mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+                ref="$tag"
+                commit=$(git ls-remote "$MESA_GIT" "refs/tags/$tag^{}" | awk '{print $1}')
+                [ -n "$commit" ] || commit=$(git ls-remote "$MESA_GIT" "refs/tags/$tag" | awk '{print $1}')
+                version="${tag#mesa-}"
+                ;;
+              nightly)
+                ref=main
+                commit=$(git ls-remote "$MESA_GIT" refs/heads/main | awk '{print $1}')
+                base=$(curl -fsSL "https://gitlab.freedesktop.org/mesa/mesa/-/raw/$commit/VERSION" | tr -d '\n')
+                version="${base}.$(date -u +%Y%m%d).${commit::7}"
+                ;;
+              *) echo "unknown channel $channel"; exit 1 ;;
+            esac
+            release="turnip-$channel-${version}"
+            [ "$channel" = stable ] && release="turnip-stable-${version}-${commit::7}"
+            echo "$channel: $ref $commit -> $release"
+            # Skip a commit that already has a release (the nightly name contains the date,
+            # so check the commit in existing release names instead).
+            if [ "$FORCE" != "true" ] && gh release list --limit 200 --json tagName -q '.[].tagName' | grep -q -- "-$channel-.*${commit::7}"; then
+              echo "  already built, skipping"
+              continue
+            fi
+            entries+=("{\"channel\":\"$channel\",\"ref\":\"$ref\",\"commit\":\"$commit\",\"version\":\"$version\",\"release\":\"$release\"}")
+          done
+          joined=$(IFS=,; echo "${entries[*]:-}")
+          echo "matrix={\"include\":[${joined}]}" >> "$GITHUB_OUTPUT"
+          echo "any=$([ ${#entries[@]} -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.any == 'true'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.prepare.outputs.matrix).include }}
+        libc: [glibc, musl]
+    name: ${{ matrix.target.channel }} / ${{ matrix.libc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Mesa ${{ matrix.target.ref }}
+        run: |
+          git init -q mesa
+          git -C mesa remote add origin "$MESA_GIT"
+          for i in 1 2 3 4; do git -C mesa fetch -q --depth 1 origin "${{ matrix.target.commit }}" && break; sleep $((i * 15)); done
+          git -C mesa checkout -q FETCH_HEAD
+          git -C mesa log -1 --format='%H %cd %s'
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ccache
+          key: turnip-ccache-${{ matrix.libc }}-${{ matrix.target.channel }}-${{ matrix.target.commit }}
+          restore-keys: |
+            turnip-ccache-${{ matrix.libc }}-${{ matrix.target.channel }}-
+            turnip-ccache-${{ matrix.libc }}-
+
+      - name: Build in container
+        run: |
+          image=debian:trixie
+          [ "${{ matrix.libc }}" = musl ] && image=alpine:3.22
+          mkdir -p ccache out
+          docker run --rm -v "$PWD:/work" -w /work -e CCACHE_DIR=/work/ccache "$image" \
+            sh drivers/turnip/build.sh "${{ matrix.libc }}" /work/mesa /work/out \
+              "${{ matrix.target.channel }}" "${{ matrix.target.version }}" "${{ matrix.target.commit }}"
+          sudo chown -R "$(id -u):$(id -g)" ccache out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip-${{ matrix.target.channel }}-${{ matrix.libc }}
+          path: out/*
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    if: always() && needs.prepare.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ls -R artifacts
+          echo "$MATRIX" | jq -c '.include[]' | while read -r t; do
+            channel=$(jq -r .channel <<<"$t"); release=$(jq -r .release <<<"$t")
+            version=$(jq -r .version <<<"$t"); commit=$(jq -r .commit <<<"$t")
+            files=$(find artifacts -path "*turnip-$channel-*" -name '*.tar.zst' | sort)
+            if [ -z "$files" ]; then echo "::warning::no artifacts for $channel"; continue; fi
+            base="https://github.com/$REPO/releases/download/$release"
+            manifest=$(jq -n --arg id "$release" --arg channel "$channel" --arg version "$version" \
+              --arg commit "$commit" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{id: $id, channel: $channel, version: $version, mesa_commit: $commit, date: $date, files: []}')
+            for f in $files; do
+              name=$(basename "$f"); libc=$(echo "$name" | sed -E 's/.*-(glibc|musl)-aarch64\.tar\.zst/\1/')
+              sha=$(sha256sum "$f" | cut -d' ' -f1); size=$(stat -c %s "$f")
+              manifest=$(jq --arg libc "$libc" --arg name "$name" --arg url "$base/$name" --arg sha "$sha" --argjson size "$size" \
+                '.files += [{libc: $libc, name: $name, url: $url, sha256: $sha, size: $size}]' <<<"$manifest")
+            done
+            echo "$manifest" > manifest.json
+            cat manifest.json
+            notes="Mesa Turnip ($channel) $version, коммит [${commit::10}](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit).
+          Собрано под KGSL (-Dfreedreno-kmds=kgsl), OpenGL через Zink. Архивы распаковываются в /opt/gpu-driver."
+            gh release delete "$release" --cleanup-tag -y >/dev/null 2>&1 || true
+            gh release create "$release" --title "Turnip $channel $version" --notes "$notes" --prerelease=$([ "$channel" = nightly ] && echo true || echo false) \
+              $files $(find artifacts -path "*turnip-$channel-*" -name '*.sha256') manifest.json
+          done
+
+      - name: Update drivers.json index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 drivers/turnip/make-index.py

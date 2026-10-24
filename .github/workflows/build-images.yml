@@ -1,0 +1,104 @@
+name: build-images
+
+# Builds rootfs.tar.zst images natively on arm64 runners and publishes them, with a
+# combined images.json, in the rolling "images" release.
+on:
+  workflow_dispatch:
+    inputs:
+      images:
+        description: 'ID образов через пробел (пусто = все)'
+        default: ''
+  push:
+    paths: ['images/**', '.github/workflows/build-images.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: images
+  cancel-in-progress: false
+
+jobs:
+  list:
+    runs-on: ubuntu-24.04
+    outputs:
+      ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: ids
+        env:
+          REQUESTED: ${{ inputs.images }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          all=$(ls -d images/*/ | xargs -n1 basename | grep -v '^common$')
+          if [ -n "$REQUESTED" ]; then
+            ids="$REQUESTED"
+          elif [ "$EVENT" = push ] && ! git diff --name-only HEAD~1 HEAD | grep -q '^images/common/\|build-images.yml'; then
+            # Only images whose directory changed in this push.
+            ids=$(git diff --name-only HEAD~1 HEAD | grep '^images/' | cut -d/ -f2 | sort -u | grep -v '^common$' || true)
+          else
+            ids="$all"
+          fi
+          json=$(printf '%s\n' $ids | jq -R . | jq -sc .)
+          echo "ids=$json" >> "$GITHUB_OUTPUT"
+          echo "Building: $json"
+
+  build:
+    needs: list
+    if: needs.list.outputs.ids != '[]'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        id: ${{ fromJSON(needs.list.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
+          df -h /
+      - name: Build ${{ matrix.id }}
+        run: |
+          sudo apt-get install -y -qq zstd jq >/dev/null
+          images/common/build-image.sh "${{ matrix.id }}" out \
+            "https://github.com/${{ github.repository }}/releases/download/images"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.id }}
+          path: out/*
+          retention-days: 3
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Upload to the "images" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ls -l artifacts
+          if ! gh release view images >/dev/null 2>&1; then
+            gh release create images --title "Образы дистрибутивов" --latest=false \
+              --notes "Образы rootfs (aarch64) для приложения и общий images.json."
+          fi
+          # Merge new entries into the existing index, replacing images with the same id.
+          curl -fsSL "https://github.com/$GH_REPO/releases/download/images/images.json" -o old.json \
+            || echo '{"schema":1,"images":[]}' > old.json
+          jq -s '.' artifacts/*.meta.json > new.json
+          jq -n --slurpfile old old.json --slurpfile new new.json --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+            ($new[0] | map(.id)) as $ids
+            | {schema: 1, generated: $now,
+               images: (($old[0].images | map(select(.id as $i | $ids | index($i) | not))) + $new[0] | sort_by(.id))}' > images.json
+          cat images.json
+          gh release upload images artifacts/*.rootfs.tar.zst --clobber
+          ls artifacts/*.preview.png >/dev/null 2>&1 && gh release upload images artifacts/*.preview.png --clobber
+          gh release upload images images.json --clobber

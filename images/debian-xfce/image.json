@@ -1,0 +1,10 @@
+{
+  "id": "debian-xfce",
+  "name": "Debian XFCE Lite",
+  "description": "Лёгкий Debian 13 с XFCE. В комплекте vkcube, vulkaninfo и glxinfo для проверки GPU.",
+  "libc": "glibc",
+  "session_type": "x11",
+  "launch_command": "startxfce4",
+  "accent": "#2B6CB0",
+  "base_image": "debian:trixie-slim"
+}

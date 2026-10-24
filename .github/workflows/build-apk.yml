@@ -1,0 +1,140 @@
+name: build-apk
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths-ignore: ['images/**', 'drivers/**', '**.md']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 29.0.14206865
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "ndk;$NDK_VERSION" "platforms;android-37.0" "build-tools;36.0.0" "cmake;3.22.1" >/dev/null
+          sudo apt-get install -y -qq gawk ccache >/dev/null
+
+      - name: Cache proot
+        id: proot-cache
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs
+          key: proot-${{ env.NDK_VERSION }}-${{ hashFiles('native/proot/build.sh') }}
+
+      - name: Build proot
+        if: steps.proot-cache.outputs.cache-hit != 'true'
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" native/proot/build.sh
+
+      - name: Cache ccache (X server native code)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-lorie-${{ github.sha }}
+          restore-keys: ccache-lorie-
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            name="${GITHUB_REF#refs/tags/v}"
+          else
+            name="0.1.${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          fi
+          echo "APP_VERSION_NAME=$name" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        env:
+          USE_CCACHE: '1'
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Build signed release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          USE_CCACHE: '1'
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          else
+            echo "::warning::KEYSTORE_BASE64 is not set, the release APK is signed with the public debug key"
+          fi
+          ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/linux-arm-debug.apk "dist/linux-arm-${{ steps.version.outputs.name }}-debug.apk"
+          if [ -f app/build/outputs/apk/release/linux-arm-release.apk ]; then
+            cp app/build/outputs/apk/release/linux-arm-release.apk "dist/linux-arm-${{ steps.version.outputs.name }}.apk"
+          fi
+          (cd dist && sha256sum *.apk > SHA256SUMS)
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ steps.version.outputs.name }}
+          path: dist/*
+
+      # Every push updates the rolling "apk-latest" pre-release, so the newest test
+      # build is always at the same place.
+      - name: Publish rolling pre-release
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Тестовая сборка из ветки ${GITHUB_REF_NAME}, коммит ${GITHUB_SHA::7}, $(date -u '+%Y-%m-%d %H:%M UTC').
+          Подписана публичным debug-ключом: обновляется поверх предыдущей тестовой сборки."
+          if ! gh release view apk-latest >/dev/null 2>&1; then
+            gh release create apk-latest --prerelease --title "Тестовая сборка (последний push)" --notes "$notes" --target "$GITHUB_SHA"
+          else
+            gh release edit apk-latest --notes "$notes" --target "$GITHUB_SHA"
+            # Drop assets of the previous build.
+            for a in $(gh release view apk-latest --json assets -q '.assets[].name'); do
+              gh release delete-asset apk-latest "$a" -y
+            done
+          fi
+          cp "dist/linux-arm-${{ steps.version.outputs.name }}-debug.apk" dist/linux-arm-latest-debug.apk
+          gh release upload apk-latest dist/linux-arm-latest-debug.apk dist/SHA256SUMS --clobber
+          # Move the tag to this commit.
+          git tag -f apk-latest "$GITHUB_SHA" && git push -f origin refs/tags/apk-latest
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "Linux ARM $GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
