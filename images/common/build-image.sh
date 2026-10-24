@@ -25,7 +25,8 @@ echo "Exporting filesystem…"
 mkdir -p "$work/rootfs"
 docker export "$name" | sudo tar -C "$work/rootfs" -xpf - --numeric-owner
 docker rm "$name" >/dev/null
-sudo rm -rf "$work/rootfs/.dockerenv" "$work/rootfs/la-build"
+# Docker bind-mounts resolv.conf/hosts/hostname; the app writes its own on install.
+sudo rm -rf "$work/rootfs/.dockerenv" "$work/rootfs/la-build" "$work/rootfs/etc/resolv.conf"
 sudo find "$work/rootfs/dev" -mindepth 1 -delete
 
 installed_size="$(sudo du -sb "$work/rootfs" | cut -f1)"

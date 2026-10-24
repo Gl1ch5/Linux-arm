@@ -17,5 +17,3 @@ if [ -d /usr/share/locale ]; then
 fi
 rm -rf /tmp/* /var/tmp/* /var/log/*.log /root/.cache /etc/machine-id
 : > /etc/machine-id
-# resolv.conf/hosts are provided by the app on install.
-rm -f /etc/resolv.conf
