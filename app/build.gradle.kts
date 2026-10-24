@@ -31,7 +31,7 @@ android {
         versionName = appVersionName
         ndk { abiFilters += "arm64-v8a" }
         buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
-        buildConfigField("String", "GITHUB_REPO", "\"gl1ch5/linux-arm\"")
+        buildConfigField("String", "GITHUB_REPO", "\"Gl1ch5/Linux-arm\"")
     }
 
     signingConfigs {
