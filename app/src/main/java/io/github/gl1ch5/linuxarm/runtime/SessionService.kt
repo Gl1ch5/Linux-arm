@@ -98,6 +98,16 @@ class SessionService : LifecycleService() {
             }
             ACTION_CANCEL_INSTALL -> if (id != null) installJobs.remove(id)?.cancel()
             ACTION_OPEN -> app.sessions.openDisplay()
+            ACTION_LAUNCH_APP -> {
+                val command = intent.getStringExtra(EXTRA_COMMAND)
+                if (id != null && command != null) track(lifecycleScope.launch {
+                    if (app.sessions.running.value?.distroId != id) app.sessions.start(id)
+                    if (app.sessions.running.value?.distroId == id) {
+                        app.sessions.launchInGuest(command)
+                        app.sessions.openDisplay()
+                    }
+                })
+            }
             else -> track(lifecycleScope.launch { })
         }
         return START_NOT_STICKY
@@ -149,6 +159,8 @@ class SessionService : LifecycleService() {
         const val ACTION_INSTALL = "install"
         const val ACTION_CANCEL_INSTALL = "cancel_install"
         const val ACTION_OPEN = "open"
+        const val ACTION_LAUNCH_APP = "launch_app"
+        const val EXTRA_COMMAND = "command"
         const val EXTRA_ID = "id"
         private const val CHANNEL = "session"
         private const val NOTIFICATION_ID = 1001
@@ -156,8 +168,8 @@ class SessionService : LifecycleService() {
         fun intent(ctx: Context, action: String, id: String?) =
             Intent(ctx, SessionService::class.java).setAction(action).putExtra(EXTRA_ID, id)
 
-        fun send(ctx: Context, action: String, id: String? = null) {
-            ContextCompat.startForegroundService(ctx, intent(ctx, action, id))
+        fun send(ctx: Context, action: String, id: String? = null, command: String? = null) {
+            ContextCompat.startForegroundService(ctx, intent(ctx, action, id).putExtra(EXTRA_COMMAND, command))
         }
 
         fun createChannel(ctx: Context) {

@@ -19,7 +19,7 @@ apt-get install -y --no-install-recommends \
     gnome-session-bin gnome-session-common gnome-session-xsession gnome-shell \
     gnome-settings-daemon gnome-control-center nautilus gnome-console gnome-text-editor \
     gsettings-desktop-schemas dconf-cli gvfs \
-    dbus dbus-x11 at-spi2-core policykit-1 \
+    dbus dbus-x11 at-spi2-core polkitd \
     adwaita-icon-theme fonts-cantarell fonts-dejavu-core fonts-noto-color-emoji \
     locales sudo nano less curl wget ca-certificates procps psmisc bash-completion \
     x11-utils x11-xserver-utils xkb-data xauth \

@@ -35,6 +35,7 @@ class SessionManager(
     private val proot = Proot(paths)
     val xserver = XServer(context)
     private var logcat: LoggedProcess? = null
+    private var audio: AudioBridge? = null
     private var session: LoggedProcess? = null
     private val lock = Mutex()
 
@@ -142,6 +143,7 @@ class SessionManager(
         val cmd = proot.command(id, env, listOf("/bin/sh", SESSION_SCRIPT), setup.binds)
         val p = Processes.start("session-$id", cmd, proot.hostEnv(), "session-$id.log")
         session = p
+        audio = AudioBridge(rootfs).also { it.start() }
         _running.value = Running(id, gpuLabel, useGpu)
         distros.setStatus(id, DistroStatus.Running)
 
@@ -151,6 +153,7 @@ class SessionManager(
             if (session === p) {
                 session = null
                 xserver.stop()
+                audio?.stop(); audio = null
                 logcat?.destroy(); logcat = null
                 _running.value = null
                 distros.setStatus(id, DistroStatus.Installed)
@@ -160,10 +163,12 @@ class SessionManager(
     }
 
     private fun installSessionScript(rootfs: File) {
-        val f = File(rootfs, SESSION_SCRIPT.removePrefix("/"))
-        f.parentFile?.mkdirs()
-        context.assets.open("session.sh").use { i -> f.outputStream().use { i.copyTo(it) } }
-        f.setExecutable(true, false)
+        val dir = File(rootfs, SESSION_SCRIPT.removePrefix("/")).parentFile!!
+        dir.mkdirs()
+        for (name in listOf("session.sh", "pulse.pa")) {
+            context.assets.open(name).use { i -> File(dir, name).outputStream().use { i.copyTo(it) } }
+        }
+        File(dir, "session.sh").setExecutable(true, false)
     }
 
     /** Starts [command] inside the running session (from a gesture or an on-screen button). */
@@ -200,6 +205,7 @@ class SessionManager(
         session?.let { AppLog.i("stopping session ${it.name}"); it.destroy() }
         session = null
         xserver.stop()
+        audio?.stop(); audio = null
         logcat?.destroy(); logcat = null
         _running.value = null
         if (r != null) distros.setStatus(r.distroId, DistroStatus.Installed)

@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Monitor
@@ -153,6 +154,7 @@ fun HomeScreen(nav: NavController, snackbar: SnackbarHostState) {
                     onStop = { SessionService.send(ctx, SessionService.ACTION_STOP) },
                     onSettings = { nav.navigate("distro/${image.id}") },
                     onDiagnostics = { nav.navigate("diagnostics/${image.id}") },
+                    onApps = { nav.navigate("apps/${image.id}") },
                     onReinstall = { SessionService.send(ctx, SessionService.ACTION_INSTALL, image.id) },
                     onDelete = { scope.launch(Dispatchers.IO) { app.distros.uninstall(image.id) } },
                 )
@@ -203,6 +205,7 @@ private fun DistroTile(
     onStop: () -> Unit,
     onSettings: () -> Unit,
     onDiagnostics: () -> Unit,
+    onApps: () -> Unit,
     onReinstall: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -241,6 +244,8 @@ private fun DistroTile(
                             onClick = { menu = false; onPrimary(DistroStatus.Installed) })
                         if (status == DistroStatus.Running) DropdownMenuItem(text = { Text("Остановить") },
                             leadingIcon = { Icon(Icons.Filled.Stop, null) }, onClick = { menu = false; onStop() })
+                        DropdownMenuItem(text = { Text("Программы и ярлыки") }, leadingIcon = { Icon(Icons.Filled.Apps, null) },
+                            onClick = { menu = false; onApps() })
                         DropdownMenuItem(text = { Text("Настройки") }, leadingIcon = { Icon(Icons.Filled.Settings, null) },
                             onClick = { menu = false; onSettings() })
                         DropdownMenuItem(text = { Text("Проверить GPU") }, leadingIcon = { Icon(Icons.Filled.Speed, null) },

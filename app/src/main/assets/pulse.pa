@@ -1,0 +1,5 @@
+# PulseAudio setup written by the Linux ARM app; sound goes to Android through a FIFO.
+load-module module-native-protocol-unix auth-anonymous=1
+load-module module-pipe-sink file=/tmp/.la-audio/out format=s16le rate=48000 channels=2 sink_name=android sink_properties=device.description=Android
+set-default-sink android
+load-module module-always-sink

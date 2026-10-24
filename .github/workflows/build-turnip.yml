@@ -160,7 +160,7 @@ jobs:
             notes="Mesa Turnip ($channel) $version, коммит [${commit::10}](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit).
           Собрано под KGSL (-Dfreedreno-kmds=kgsl), OpenGL через Zink. Архивы распаковываются в /opt/gpu-driver."
             gh release delete "$release" --cleanup-tag -y >/dev/null 2>&1 || true
-            gh release create "$release" --title "Turnip $channel $version" --notes "$notes" --prerelease=$([ "$channel" = nightly ] && echo true || echo false) \
+            gh release create "$release" --title "Turnip $channel $version" --notes "$notes" --prerelease=$([ "$channel" = nightly ] && echo true || echo false) --latest=false \
               $files $(find artifacts -path "*turnip-$channel-*" -name '*.sha256') manifest.json
           done
 

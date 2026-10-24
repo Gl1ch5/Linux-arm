@@ -26,6 +26,14 @@ if command -v dbus-daemon >/dev/null 2>&1; then
     dbus-daemon --system --fork >/dev/null 2>&1 && log "system dbus started" || log "system dbus failed (ignored)"
 fi
 
+# Sound: PulseAudio with a pipe sink that the app plays through Android audio.
+if command -v pulseaudio >/dev/null 2>&1 && [ -f /usr/local/lib/linux-arm/pulse.pa ]; then
+    mkdir -p /tmp/.la-audio
+    pulseaudio --kill >/dev/null 2>&1
+    pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit -n -F /usr/local/lib/linux-arm/pulse.pa \
+        --log-target=stderr >/tmp/.la-audio/pulse.log 2>&1 && log "pulseaudio started" || log "pulseaudio failed, see /tmp/.la-audio/pulse.log"
+fi
+
 if command -v dbus-run-session >/dev/null 2>&1; then
     exec dbus-run-session -- sh -c "$LA_LAUNCH"
 else

@@ -23,6 +23,7 @@ class App : LorieApp() {
     lateinit var drivers: DriverManager
     lateinit var sessions: SessionManager
     lateinit var controls: io.github.gl1ch5.linuxarm.controls.ControlsRepository
+    lateinit var updates: io.github.gl1ch5.linuxarm.update.UpdateManager
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
@@ -41,6 +42,7 @@ class App : LorieApp() {
         drivers = DriverManager(paths).also { it.load() }
         sessions = SessionManager(this, paths, distros, drivers)
         controls = io.github.gl1ch5.linuxarm.controls.ControlsRepository(java.io.File(paths.config, "controls.json"))
+        updates = io.github.gl1ch5.linuxarm.update.UpdateManager(this, scope).also { it.start() }
         registerActivityLifecycleCallbacks(RefreshRateApplier())
     }
 
