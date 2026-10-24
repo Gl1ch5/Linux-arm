@@ -14,10 +14,18 @@ mkdir -p "$out"
 work="$(mktemp -d)"
 name="la-build-$id"
 
+# Optional host-side step (downloads etc.), its output is mounted at /la-build/cache.
+cache="$work/cache"
+mkdir -p "$cache"
+if [ -f "$dir/prepare.sh" ]; then
+    echo "Running prepare.sh…"
+    bash "$dir/prepare.sh" "$cache"
+fi
+
 docker rm -f "$name" >/dev/null 2>&1 || true
 docker pull --platform linux/arm64 "$base_image"
 docker create --platform linux/arm64 --name "$name" \
-    -v "$dir:/la-build/image:ro" -v "$here/common:/la-build/common:ro" \
+    -v "$dir:/la-build/image:ro" -v "$here/common:/la-build/common:ro" -v "$cache:/la-build/cache:ro" \
     "$base_image" /bin/sh -c 'if command -v bash >/dev/null; then exec bash /la-build/image/setup.sh; else exec sh /la-build/image/setup.sh; fi' >/dev/null
 docker start -a "$name"
 

@@ -53,16 +53,11 @@ harden_pacman_conf() {
 [[ "$(uname -m)" == aarch64 ]] || die "the image must be built natively on arm64 (uname -m: $(uname -m))"
 df -h / || true
 
-# 1. Tools needed to fetch and unpack the bundle. The base image ships pacman and xz.
-harden_pacman_conf
-retry 3 pacman -Sy --noconfirm --needed curl ca-certificates ca-certificates-mozilla
-
-# 2. Download the bundle and check its pinned sha256 before anything is extracted.
-work="$(mktemp -d /var/tmp/omarchy-image.XXXXXX)"
-bundle="$work/bundle.tar"
-retry 3 curl --fail --location --silent --show-error \
-  --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 30 \
-  --output "$bundle" "$BUNDLE_URL" || die "download failed: $BUNDLE_URL"
+# 1+2. The bundle is downloaded on the CI host by prepare.sh (installing curl into the old
+#      base image would be a partial Arch upgrade and breaks libcurl). Check its pinned
+#      sha256 again before anything is extracted.
+bundle=/la-build/cache/bundle.tar
+[[ -f "$bundle" ]] || die "missing $bundle (prepare.sh did not run?)"
 echo "$BUNDLE_SHA256  $bundle" | sha256sum -c - || die "bundle sha256 does not match the pinned release"
 log "bundle sha256 verified"
 
@@ -91,7 +86,6 @@ tar -xOf "$bundle" "$ROOTFS_MEMBER" \
       --exclude=etc/hostname --exclude=./etc/hostname \
       --exclude=etc/resolv.conf --exclude=./etc/resolv.conf \
   || die "extracting the rootfs failed; the build output must be discarded"
-rm -f "$bundle"
 ldconfig
 
 # 5. Check that the rootfs is the expected one before building on top of it.
@@ -108,11 +102,12 @@ for path in \
 done
 [[ -x /opt/omarchy-android/hyprland/bin/Hyprland ]] || die "Hyprland is not executable"
 
-# 6. Weston (x11 backend) is not in the bundle, so install Arch's package. -S without -u:
-#    only missing packages are added. The keyring is refreshed first so signatures verify.
+# 6. Weston (x11 backend) is not in the bundle, so install Arch's package. Arch does not
+#    support partial upgrades (-Sy + -S pulls new libraries next to old ones), so do a full
+#    -Syu; the patched Hyprland/Aquamarine/Mesa live in /opt with their own libraries.
 harden_pacman_conf
 retry 3 pacman -Sy --noconfirm --needed archlinux-keyring
-retry 3 pacman -S --noconfirm --needed weston xorg-xwininfo
+retry 3 pacman -Syu --noconfirm --needed weston xorg-xwininfo
 command -v weston >/dev/null || die "weston was not installed"
 command -v xwininfo >/dev/null || die "xwininfo was not installed"
 
@@ -140,5 +135,4 @@ install -D -m 0755 /la-build/image/la-omarchy-session /usr/local/bin/la-omarchy-
 [[ -x /usr/local/bin/la-omarchy-session ]] || die "la-omarchy-session was not installed"
 
 # 8. Clean the staging directory, then the shared cleanup, which must run last.
-rm -rf "$work"
 bash /la-build/common/cleanup.sh
