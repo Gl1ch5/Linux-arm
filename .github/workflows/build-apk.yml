@@ -7,16 +7,22 @@ on:
     paths-ignore: ['images/**', 'drivers/**', '**.md']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Выпустить версию (например 0.2.0): создаст тег v<версия> и релиз. Пусто = обычная сборка'
+        default: ''
 
 permissions:
   contents: write
 
 concurrency:
-  group: apk-${{ github.ref }}
+  group: apk-${{ github.ref }}-${{ inputs.release }}
   cancel-in-progress: true
 
 env:
   NDK_VERSION: 29.0.14206865
+  # A release is either a pushed v* tag or a manual run with the "release" input.
+  RELEASE_VERSION: ${{ inputs.release || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 jobs:
   apk:
@@ -62,8 +68,9 @@ jobs:
       - name: Version
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            name="${GITHUB_REF#refs/tags/v}"
+          if [ -n "$RELEASE_VERSION" ]; then
+            name="${RELEASE_VERSION#v}"
+            echo "RELEASE_TAG=v$name" >> "$GITHUB_ENV"
           else
             name="0.1.${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
           fi
@@ -77,7 +84,7 @@ jobs:
         run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Build signed release APK
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_VERSION != ''
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -106,7 +113,7 @@ jobs:
       # Small file the app polls for updates (release downloads are not API-rate-limited).
       - name: version.json
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [ -n "$RELEASE_VERSION" ]; then
             apk="linux-arm-${{ steps.version.outputs.name }}.apk"; [ -f "dist/$apk" ] || apk="linux-arm-${{ steps.version.outputs.name }}-debug.apk"
             channel=stable
           else
@@ -130,7 +137,7 @@ jobs:
       # Every push updates the rolling "apk-latest" pre-release, so the newest test
       # build is always at the same place.
       - name: Publish rolling pre-release
-        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') && env.RELEASE_VERSION == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -151,11 +158,12 @@ jobs:
           # Move the tag to this commit.
           git tag -f apk-latest "$GITHUB_SHA" && git push -f origin refs/tags/apk-latest
 
-      - name: Publish tagged release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish release
+        if: env.RELEASE_VERSION != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "Linux ARM $GITHUB_REF_NAME" --generate-notes --latest
-          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          rm -f dist/linux-arm-latest-debug.apk
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Linux ARM $RELEASE_TAG" --generate-notes --latest
+          gh release upload "$RELEASE_TAG" dist/* --clobber

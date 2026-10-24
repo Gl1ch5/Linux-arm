@@ -61,8 +61,10 @@ android {
             // BuildConfig and addresses its broadcasts to exactly that package.
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // R8 stays off until the release build is verified on a device: the X server
+            // and Termux:X11 rely on reflection and JNI callbacks by name.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (System.getenv("KEYSTORE_FILE") != null)
                 signingConfigs.getByName("release") else signingConfigs.getByName("debug")
