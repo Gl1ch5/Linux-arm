@@ -1,0 +1,238 @@
+#!/bin/bash
+# Omarchy session for Linux ARM. Runs inside the guest only.
+#
+#   Termux:X11 (DISPLAY=:0) <- Weston (x11 backend) <- Hyprland (nested Wayland client)
+#
+# Mirrors runtime/host/omarchy-android-start of BlackFireAlex/omarchy-android (MIT), with
+# the host-side steps removed: there is no Termux host here. Every line this script prints
+# starts with "[omarchy]". Everything goes to stdout, which is the app's session log.
+set -euo pipefail
+
+MESA_PREFIX=/opt/omarchy-android/mesa/root/usr
+TURNIP_ICD=/opt/omarchy-android/mesa/freedreno_icd.json
+AQUAMARINE_STAGE=/opt/omarchy-android/aquamarine
+HYPRLAND_STAGE=/opt/omarchy-android/hyprland
+RUNTIME_DIR=/tmp/runtime-root
+WESTON_SOCKET=wayland-omarchy
+OMARCHY_HOME=/home/omarchy
+HYPRLAND_CONFIG="$OMARCHY_HOME/.config/hypr/hyprland.lua"
+# Weston renderers to try in order. gl uses KGSL through the Mesa below. pixman is a CPU
+# fallback; Hyprland then uses the shared-memory output path, which is slower.
+WESTON_RENDERERS="${OMARCHY_WESTON_RENDERERS:-gl pixman}"
+
+log() { printf '[omarchy] %s\n' "$*"; }
+die() { printf '[omarchy] ERROR: %s\n' "$*"; exit 1; }
+
+# Sets a variable only when the caller (app extras, user settings) has not set it.
+set_default() {
+  local name="$1" value="$2"
+  if [[ -z "${!name:-}" ]]; then
+    export "$name=$value"
+  fi
+}
+
+weston_pid=""
+
+# True while the Weston process we started still exists and is not a zombie.
+weston_alive() {
+  local state
+  [[ -n "$weston_pid" && -r "/proc/$weston_pid/stat" ]] || return 1
+  state="$(awk '{ print $3 }' "/proc/$weston_pid/stat" 2>/dev/null || true)"
+  [[ -n "$state" && "$state" != Z ]]
+}
+
+# Runs on EXIT through the trap below, so shellcheck cannot see the call.
+# shellcheck disable=SC2329
+cleanup() {
+  local status=$?
+  if [[ -n "$weston_pid" ]] && weston_alive; then
+    log "stopping Weston (pid $weston_pid)"
+    kill -TERM "$weston_pid" 2>/dev/null || true
+    wait "$weston_pid" 2>/dev/null || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+log "session start: arch=$(uname -m) DISPLAY=${DISPLAY:-<unset>} user=$(id -un 2>/dev/null || echo '?')"
+
+# 1. Preconditions. Each failure prints one clear reason.
+[[ -n "${DISPLAY:-}" ]] || die "DISPLAY is not set: the X server of the app did not start."
+if [[ ! -r /dev/kgsl-3d0 || ! -w /dev/kgsl-3d0 ]]; then
+  die "/dev/kgsl-3d0 is not readable and writable. Omarchy needs the Adreno GPU (KGSL) and this image has no software fallback. Check that the app binds /dev into the guest."
+fi
+log "KGSL device present: /dev/kgsl-3d0"
+for path in "$MESA_PREFIX/lib/libvulkan_freedreno.so" "$MESA_PREFIX/lib/dri/kgsl_dri.so" "$TURNIP_ICD"; do
+  [[ -e "$path" ]] || die "missing $path: the rootfs is incomplete, reinstall the image."
+done
+[[ -x "$HYPRLAND_STAGE/bin/Hyprland" ]] || die "missing $HYPRLAND_STAGE/bin/Hyprland, reinstall the image."
+
+# 2. GPU environment. Unset the Turnip/Zink variables the app sets, then use this image's
+#    KGSL Mesa, exactly as the reference does for its compositor.
+unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH __EGL_VENDOR_LIBRARY_FILENAMES GBM_BACKENDS_PATH \
+  __GLX_VENDOR_LIBRARY_NAME GALLIUM_DRIVER MESA_LOADER_DRIVER_OVERRIDE VK_ICD_FILENAMES \
+  LIBGL_ALWAYS_SOFTWARE TU_DEBUG WAYLAND_DISPLAY
+export LD_LIBRARY_PATH="$MESA_PREFIX/lib:$AQUAMARINE_STAGE/lib"
+export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib/dri"
+export VK_ICD_FILENAMES="$TURNIP_ICD"
+export MESA_LOADER_DRIVER_OVERRIDE=kgsl
+export FD_KGSL_ENABLE_DMABUF=1
+if [[ -f "$MESA_PREFIX/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
+  export __EGL_VENDOR_LIBRARY_FILENAMES="$MESA_PREFIX/share/glvnd/egl_vendor.d/50_mesa.json"
+fi
+log "GPU: MESA_LOADER_DRIVER_OVERRIDE=kgsl, ICD=$TURNIP_ICD"
+
+# 3. Session environment, as in the reference launcher.
+export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_DESKTOP=Hyprland
+export XDG_DATA_DIRS="$HYPRLAND_STAGE/share:/usr/local/share:/usr/share"
+export PATH="$HYPRLAND_STAGE/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export LANG="${LANG:-C.UTF-8}"
+# The app starts this session as root with HOME=/root. Omarchy's configuration is seeded
+# in /home/omarchy, so use that home.
+if [[ -d "$OMARCHY_HOME" ]]; then
+  export HOME="$OMARCHY_HOME"
+fi
+export OMARCHY_PROOT=1
+export OMARCHY_PATH=/usr/share/omarchy
+export OMARCHY_GPU_MODE=kgsl
+export NO_AT_BRIDGE=1
+export QT_ACCESSIBILITY=0
+export GTK_A11Y=none
+export XWAYLAND_NO_GLAMOR=1
+export QT_QPA_PLATFORM=wayland
+export GDK_BACKEND=wayland
+export SDL_VIDEODRIVER=wayland
+set_default OMARCHY_SCALE 2
+set_default OMARCHY_REFRESH_MHZ 60000
+set_default OMARCHY_KEYBOARD_LAYOUT us
+set_default AQ_NO_KMS_REQUIREMENT 1
+set_default AQ_NO_MODIFIERS 1
+set_default AQ_ANDROID_DMABUF_HEAP 0
+set_default AQ_ANDROID_DMABUF_GLFINISH 0
+set_default AQ_ANDROID_DMABUF_VULKAN 0
+set_default HYPRLAND_ANDROID_DMABUF 1
+set_default HYPRLAND_SHM_GLFINISH 0
+set_default HYPRLAND_SHM_DAMAGE 1
+set_default HYPRLAND_SHM_PROFILE 0
+set_default HYPRLAND_GL_DMABUF_EXPORT 1
+set_default HYPRLAND_EGL_NO_MODIFIERS 1
+set_default HYPRLAND_EGL_SURFACELESS 1
+set_default HYPRLAND_NO_SD_NOTIFY 1
+set_default HYPRLAND_NO_SD_VARS 1
+set_default HYPRLAND_NO_RT 1
+export AQ_WAYLAND_REFRESH_MHZ="$OMARCHY_REFRESH_MHZ"
+
+mkdir -p "$RUNTIME_DIR"
+chmod 700 "$RUNTIME_DIR"
+rm -f "$RUNTIME_DIR/wayland-1" "$RUNTIME_DIR/wayland-1.lock" \
+  "$RUNTIME_DIR/$WESTON_SOCKET" "$RUNTIME_DIR/$WESTON_SOCKET.lock"
+
+# 4. Output size. Termux:X11 first reports a fallback size, then resizes when the Android
+#    surface attaches, so wait for the geometry to stop changing before using it.
+output_w=1280
+output_h=800
+
+root_geometry() {
+  xwininfo -root 2>/dev/null | awk '/Width:/ { w = $2 } /Height:/ { h = $2 } END { if (w && h) print w " " h }' || true
+}
+
+if command -v xwininfo >/dev/null 2>&1; then
+  sample=""
+  for _ in $(seq 1 300); do
+    sample="$(root_geometry)"
+    if [[ -n "$sample" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$sample" ]]; then
+    log "X server $DISPLAY did not answer within 30 s; using ${output_w}x${output_h}"
+  else
+    last="" stable=0
+    for _ in $(seq 1 100); do
+      sample="$(root_geometry)"
+      if [[ "$sample" == "$last" ]]; then
+        stable=$((stable + 1))
+      else
+        stable=0
+        last="$sample"
+      fi
+      if (( stable >= 5 )); then
+        break
+      fi
+      sleep 0.1
+    done
+    w="" h=""
+    read -r w h <<<"$last" || true
+    if [[ "$w" =~ ^[0-9]+$ && "$h" =~ ^[0-9]+$ ]]; then
+      output_w=$w
+      output_h=$h
+    fi
+    log "X root geometry: ${output_w}x${output_h}"
+  fi
+else
+  log "xwininfo is missing; using ${output_w}x${output_h}"
+fi
+export OMARCHY_OUTPUT_WIDTH="$output_w"
+export OMARCHY_OUTPUT_HEIGHT="$output_h"
+
+# 5. Weston, nested in the X server. Waits for its Wayland socket; falls back to the next
+#    renderer if one fails to start.
+command -v weston >/dev/null 2>&1 || die "weston is not installed: run 'pacman -S weston' in the guest."
+
+start_weston() {
+  local renderer="$1" _
+  rm -f "$RUNTIME_DIR/$WESTON_SOCKET" "$RUNTIME_DIR/$WESTON_SOCKET.lock"
+  log "starting Weston: x11 backend on $DISPLAY, renderer=$renderer, ${output_w}x${output_h}, shell=kiosk"
+  weston -B x11 --renderer="$renderer" --shell=kiosk --socket="$WESTON_SOCKET" \
+    --width="$output_w" --height="$output_h" --scale=1 --idle-time=0 &
+  weston_pid=$!
+  for _ in $(seq 1 150); do
+    if [[ -S "$RUNTIME_DIR/$WESTON_SOCKET" ]]; then
+      log "Weston is ready: $RUNTIME_DIR/$WESTON_SOCKET (renderer=$renderer, pid $weston_pid)"
+      return 0
+    fi
+    if ! weston_alive; then
+      log "Weston exited during startup (renderer=$renderer)"
+      weston_pid=""
+      return 1
+    fi
+    sleep 0.1
+  done
+  log "Weston did not create its socket within 15 s (renderer=$renderer)"
+  kill -TERM "$weston_pid" 2>/dev/null || true
+  wait "$weston_pid" 2>/dev/null || true
+  weston_pid=""
+  return 1
+}
+
+started_renderer=""
+for renderer in $WESTON_RENDERERS; do
+  if start_weston "$renderer"; then
+    started_renderer="$renderer"
+    break
+  fi
+done
+[[ -n "$started_renderer" ]] || die "Weston did not start with any renderer ($WESTON_RENDERERS). See the weston lines above."
+if [[ "$started_renderer" != gl ]]; then
+  log "WARNING: Weston runs with renderer=$started_renderer; Hyprland uses the shared-memory output path (slower)."
+fi
+
+# 6. Hyprland, as a Wayland client of Weston. DISPLAY is removed so Hyprland does not treat
+#    the X server as its host; its own XWayland is started by Hyprland.
+hypr_args=()
+if [[ -f "$HYPRLAND_CONFIG" ]]; then
+  hypr_args=(--config "$HYPRLAND_CONFIG")
+fi
+log "starting Hyprland: WAYLAND_DISPLAY=$WESTON_SOCKET, HOME=$HOME, config=${HYPRLAND_CONFIG}"
+set +e
+env -u DISPLAY WAYLAND_DISPLAY="$WESTON_SOCKET" "$HYPRLAND_STAGE/bin/Hyprland" "${hypr_args[@]}"
+hypr_status=$?
+set -e
+log "Hyprland exited with status $hypr_status; Hyprland log: $RUNTIME_DIR/hypr/*/hyprland.log"
+exit "$hypr_status"

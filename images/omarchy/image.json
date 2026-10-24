@@ -1,0 +1,10 @@
+{
+  "id": "omarchy",
+  "name": "Omarchy",
+  "description": "Arch Linux ARM с Hyprland (Omarchy). Запускается вложенно в Weston поверх Termux:X11, ускорение на Adreno через KGSL и Mesa из проекта omarchy-android.",
+  "libc": "glibc",
+  "session_type": "wayland-nested",
+  "launch_command": "/usr/local/bin/la-omarchy-session",
+  "accent": "#7AA2F7",
+  "base_image": "danhunsaker/archlinuxarm@sha256:37260b35a1b8af210816871d97664c4e74cd559ade2b64e78f691d067e9baa96"
+}
