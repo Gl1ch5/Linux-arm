@@ -1,0 +1,177 @@
+#!/bin/bash
+# Phosh session for Linux ARM (X11 on Termux:X11, no systemd, no logind).
+# Started by session.sh inside dbus-run-session, as LA_LAUNCH. Every line starts with [phosh].
+#
+# Plan:
+#   1. phoc (wlroots, x11 backend) opens one window on DISPLAY=:0, sized like the Termux:X11
+#      surface. Its phoc.ini is written here: the phosh-session script of the package assumes
+#      a fixed size.
+#   2. phoc runs gnome-session --session=phosh. That starts phosh (the shell), squeekboard
+#      (on-screen keyboard) and gnome-settings-daemon. Apps are native Wayland clients of phoc.
+#   3. If phoc exits with an error within 20 s, it is started again with the pixman renderer
+#      (CPU). wlroots' GL path needs DRI3/Present, which Termux:X11 does not offer.
+# Environment: LA_PHOSH_SCALE (default 3) sets the output scale; LA_PHOSH_DEBUG=1 gives
+# gnome-session debug output.
+
+log()  { echo "[phosh] $*"; }
+warn() { echo "[phosh] WARNING: $*"; }
+
+pkgver() { dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo "missing"; }
+
+# Re-run inside a session bus if the caller did not provide one.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -z "${LA_PHOSH_REEXEC:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    export LA_PHOSH_REEXEC=1
+    log "no session bus, starting one with dbus-run-session"
+    exec dbus-run-session -- "$0" "$@"
+fi
+
+# Session identity. The shell's desktop entry has OnlyShowIn=GNOME, so GNOME must be listed.
+export XDG_CURRENT_DESKTOP=Phosh:GNOME
+export XDG_SESSION_DESKTOP=phosh
+export DESKTOP_SESSION=phosh
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_CLASS=user
+# Toolkits: apps are Wayland clients of phoc. No accessibility bus (see docs/phosh.md).
+export GDK_BACKEND=wayland
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
+export GIO_USE_VOLUME_MONITOR=unix
+# wlroots: only the X11 backend (the Termux:X11 server), no DRM, no hardware cursor.
+export WLR_BACKENDS=x11
+export WLR_NO_HARDWARE_CURSORS=1
+unset WAYLAND_DISPLAY
+export DISPLAY="${DISPLAY:-:0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-root}"
+if mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"; then :; else
+    warn "cannot create $XDG_RUNTIME_DIR"
+fi
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    log "distro: ${PRETTY_NAME:-unknown}"
+fi
+log "packages: phoc=$(pkgver phoc) phosh=$(pkgver phosh) squeekboard=$(pkgver squeekboard) gnome-session=$(pkgver gnome-session-bin)"
+log "session bus: ${DBUS_SESSION_BUS_ADDRESS:-<none>}"
+
+if [ -d /run/systemd/system ]; then
+    log "systemd: /run/systemd/system present (unexpected in this guest)"
+else
+    log "systemd: not running, gnome-session uses its builtin service manager"
+fi
+
+# Wait for the X server. The app starts it before the guest, but the socket can lag.
+display_num="${DISPLAY#:}"
+display_num="${display_num%%.*}"
+x_socket="/tmp/.X11-unix/X${display_num}"
+i=0
+while [ ! -S "$x_socket" ] && [ "$i" -lt 60 ]; do
+    sleep 0.5
+    i=$((i + 1))
+done
+if [ ! -S "$x_socket" ]; then
+    warn "X socket $x_socket not found after 30 s. phoc cannot start without an X server."
+    exit 1
+fi
+log "X server ready: DISPLAY=$DISPLAY ($x_socket)"
+
+# phoc's X11 backend needs these extensions. A missing one is the first thing to check.
+xdpyinfo_out="$(timeout 5 xdpyinfo 2>/dev/null || true)"
+if [ -z "$xdpyinfo_out" ]; then
+    warn "xdpyinfo gave no output; cannot check X extensions"
+else
+    missing=""
+    for ext in Composite DAMAGE DRI3 Present RANDR SHAPE SYNC XFIXES XInputExtension XKEYBOARD MIT-SHM RENDER; do
+        if ! printf '%s\n' "$xdpyinfo_out" | grep -qE "^[[:space:]]+${ext}([[:space:]]|\$)"; then
+            missing="$missing $ext"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        warn "X extensions not reported by the server:$missing"
+    else
+        log "X extensions: all required present"
+    fi
+fi
+
+# Output size. Termux:X11 first reports a fallback size, then resizes when the Android surface
+# attaches. Wait until the geometry stops changing (about 0.5 s), then use it.
+out_w=1272
+out_h=2800
+root_size() {
+    xwininfo -root 2>/dev/null | awk '/Width:/ { w = $2 } /Height:/ { h = $2 } END { if (w && h) print w " " h }' || true
+}
+last=""
+stable=0
+i=0
+while [ "$i" -lt 100 ] && [ "$stable" -lt 5 ]; do
+    sample="$(root_size)"
+    if [ -n "$sample" ] && [ "$sample" = "$last" ]; then
+        stable=$((stable + 1))
+    else
+        stable=0
+        last="$sample"
+    fi
+    sleep 0.1
+    i=$((i + 1))
+done
+if [ -n "$last" ]; then
+    w="${last% *}"
+    h="${last#* }"
+    case "$w$h" in
+        *[!0-9]*) warn "unexpected X root size '$last', using ${out_w}x${out_h}" ;;
+        *) out_w=$w; out_h=$h ;;
+    esac
+else
+    warn "xwininfo gave no root size, using ${out_w}x${out_h}"
+fi
+scale="${LA_PHOSH_SCALE:-3}"
+log "output: ${out_w}x${out_h}, scale $scale (about $((out_w / scale))x$((out_h / scale)) logical pixels)"
+
+# phoc configuration for this start. The output of the x11 backend is named X11-1.
+phoc_ini="$XDG_RUNTIME_DIR/phoc.ini"
+cat > "$phoc_ini" <<INI
+# Written by la-phosh-session for this start.
+[output:X11-1]
+mode = ${out_w}x${out_h}
+scale = ${scale}
+INI
+
+gs_args="--disable-acceleration-check --session=phosh"
+if [ -n "${LA_PHOSH_DEBUG:-}" ]; then
+    gs_args="$gs_args --debug"
+fi
+
+# Sandbox: WebKit (Epiphany) runs its web processes in bubblewrap. Without unprivileged user
+# namespaces (proot on Android) they cannot start, so the sandbox is turned off in that case.
+if ! bwrap --ro-bind / / true >/dev/null 2>&1; then
+    export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+    warn "bubblewrap is missing or cannot create namespaces: WebKit sandbox disabled for this session"
+fi
+
+# Stops what a failed phoc session left behind, before the next try.
+stop_leftovers() {
+    pkill -x gnome-session-b 2>/dev/null || true
+    pkill -x squeekboard 2>/dev/null || true
+    pkill -x phosh 2>/dev/null || true
+    pkill -x phoc 2>/dev/null || true
+}
+
+rc=1
+for renderer in gles2 pixman; do
+    log "starting phoc: renderer=$renderer, gnome-session --session=phosh"
+    SECONDS=0
+    WLR_RENDERER="$renderer" phoc -v -S -C "$phoc_ini" \
+        -E "bash -lc 'exec gnome-session $gs_args'"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        log "phoc ended normally (exit 0)"
+        exit 0
+    fi
+    warn "phoc exited with code $rc after ${SECONDS} s (renderer=$renderer)"
+    if [ "$SECONDS" -ge 20 ]; then
+        # The session ran for a while before it failed: no point in another renderer.
+        exit "$rc"
+    fi
+    stop_leftovers
+done
+warn "phoc did not start with any renderer. Look above for 'phoc', 'EGL' or 'x11' errors."
+exit "$rc"

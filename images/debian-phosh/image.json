@@ -1,0 +1,10 @@
+{
+  "id": "debian-phosh",
+  "name": "Phosh",
+  "description": "Debian 13 с Phosh, оболочкой GNOME для телефонов. Запускается вложенно в phoc поверх X11 (Termux:X11). Тёмная тема, масштаб 3, экранная клавиатура Squeekboard, GNOME Console, Nautilus, Epiphany, калькулятор и текстовый редактор (см. docs/phosh.md).",
+  "libc": "glibc",
+  "session_type": "wayland-nested",
+  "launch_command": "/usr/local/bin/la-phosh-session",
+  "accent": "#3584E4",
+  "base_image": "debian:trixie-slim"
+}

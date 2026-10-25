@@ -161,6 +161,7 @@ arm64-контейнере базового образа). Результат: `
 | Десктоп в стиле macOS (собственное название, без брендинга Apple) | этап 3 |
 | KDE Plasma Mobile (Debian 13, kwin_wayland вложенно в X11, см. `docs/plasma-mobile.md`) | экспериментально |
 | GNOME | этап 4, после исследования |
+| `debian-phosh`: Debian 13 + Phosh (мобильная оболочка GNOME) во вложенном phoc | экспериментально, см. `docs/phosh.md` |
 
 ## Сборка (CI)
 
