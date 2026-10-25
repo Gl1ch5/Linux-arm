@@ -19,6 +19,14 @@ if [ ! -s /etc/machine-id ]; then
     fi
 fi
 
+# Phosh always starts on its lock screen and checks the code through PAM, but root has
+# no password inside the guest. Any code unlocks (images built before this have no fix).
+if { [ -f /etc/pam.d/phosh ] || [ -e /usr/libexec/phosh ]; } && ! grep -qs pam_permit /etc/pam.d/phosh; then
+    printf '%s\n' 'auth sufficient pam_permit.so' 'account sufficient pam_permit.so' \
+        'password sufficient pam_permit.so' 'session optional pam_permit.so' > /etc/pam.d/phosh
+    log "phosh: lock screen accepts any code"
+fi
+
 # A system bus keeps a number of desktop components quiet; failures are harmless.
 if command -v dbus-daemon >/dev/null 2>&1; then
     mkdir -p /run/dbus

@@ -51,13 +51,16 @@ fun LogsScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var files by remember { mutableStateOf(AppLog.allFiles()) }
-    var selected by remember { mutableStateOf(files.firstOrNull()?.name) }
+    var selected by remember { mutableStateOf<String?>(AppLog.COMBINED) }
     var text by remember { mutableStateOf("") }
     var reload by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(selected, reload) {
+        text = withContext(Dispatchers.IO) {
+            if (selected == AppLog.COMBINED) AppLog.buildCombined(DeviceInfo.summary(ctx))
+            selected?.let { tail(AppLog.file(it), 3000) } ?: "Логов пока нет."
+        }
         files = AppLog.allFiles()
-        text = withContext(Dispatchers.IO) { selected?.let { tail(AppLog.file(it), 3000) } ?: "Логов пока нет." }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -72,7 +75,8 @@ fun LogsScreen() {
             files.forEach { f ->
                 FilterChip(
                     selected = f.name == selected, onClick = { selected = f.name },
-                    label = { Text(f.name) }, modifier = Modifier.padding(end = 8.dp),
+                    label = { Text(if (f.name == AppLog.COMBINED) "Все логи" else f.name) },
+                    modifier = Modifier.padding(end = 8.dp),
                 )
             }
         }
@@ -100,11 +104,19 @@ suspend fun shareLogs(ctx: Context) {
         val dir = File(ctx.cacheDir, "share").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val out = File(dir, "linux-arm-logs-$stamp.zip")
+        val summary = DeviceInfo.summary(ctx)
+        AppLog.buildCombined(summary)
         ZipOutputStream(out.outputStream()).use { z ->
+            // all.log comes first: it alone holds everything below.
+            AppLog.allFiles().filter { it.name == AppLog.COMBINED }.forEach { f ->
+                z.putNextEntry(ZipEntry("00-${f.name}"))
+                f.inputStream().use { it.copyTo(z) }
+                z.closeEntry()
+            }
             z.putNextEntry(ZipEntry("device.txt"))
-            z.write(DeviceInfo.summary(ctx).toByteArray())
+            z.write(summary.toByteArray())
             z.closeEntry()
-            AppLog.allFiles().forEach { f ->
+            AppLog.allFiles().filter { it.name != AppLog.COMBINED }.forEach { f ->
                 z.putNextEntry(ZipEntry(f.name))
                 f.inputStream().use { it.copyTo(z) }
                 z.closeEntry()

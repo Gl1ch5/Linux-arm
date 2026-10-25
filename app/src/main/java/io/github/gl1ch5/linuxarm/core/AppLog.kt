@@ -24,9 +24,67 @@ object AppLog {
 
     fun file(name: String) = File(dir, name)
 
+    /** All logs, [COMBINED] first, then the newest. */
     fun allFiles(): List<File> =
         dir.listFiles { f -> f.isFile && (f.name.endsWith(".log") || f.name.endsWith(".log.1")) }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
+            ?.sortedWith(compareBy<File> { it.name != COMBINED }.thenByDescending { it.lastModified() })
+            ?: emptyList()
+
+    const val COMBINED = "all.log"
+
+    /**
+     * Writes [COMBINED]: the device summary and every other log in one file, so that one
+     * file is enough to share. Order: app.log, the session logs, X server, diagnostics,
+     * logcat, then the previous runs (*.log.1). Runs of identical lines are collapsed.
+     */
+    @Synchronized
+    fun buildCombined(header: String): File {
+        val out = File(dir, COMBINED)
+        val files = dir.listFiles { f -> f.isFile && f.name != COMBINED && (f.name.endsWith(".log") || f.name.endsWith(".log.1")) }
+            .orEmpty()
+        fun rank(f: File): Int {
+            val n = f.name.removeSuffix(".1")
+            val base = when {
+                n == "app.log" -> 0
+                n.startsWith("session-") -> 1
+                n == "xserver.log" -> 2
+                n == "diagnostics.log" -> 3
+                n == "logcat.log" -> 4
+                else -> 5
+            }
+            return base + if (f.name.endsWith(".1")) 10 else 0
+        }
+        val sorted = files.sortedWith(compareBy<File>({ rank(it) }, { -it.lastModified() }))
+        val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        out.bufferedWriter().use { w ->
+            w.write("##### Linux ARM: все логи одним файлом (${stamp.format(Date())})\n")
+            w.write(header.trimEnd()); w.write("\n")
+            w.write("Файлы: ${sorted.joinToString(", ") { it.name }}\n")
+            for (f in sorted) {
+                w.write("\n\n##### ${f.name} (${f.length() / 1024} КБ, изменён ${stamp.format(Date(f.lastModified()))})")
+                if (f.name.endsWith(".1")) w.write(" — предыдущий запуск")
+                w.write("\n")
+                // logcat is huge and mostly other apps' noise: its tail is what matters.
+                val limit = if (f.name.startsWith("logcat")) 4000 else 20000
+                val lines = runCatching { f.readLines() }.getOrElse { listOf("(не читается: ${it.message})") }
+                if (lines.size > limit) w.write("… пропущено ${lines.size - limit} строк в начале\n")
+                var prev: String? = null
+                var repeats = 0
+                fun flush() {
+                    if (repeats > 0) w.write("    … повтор ещё ${repeats} раз\n")
+                    repeats = 0
+                }
+                for (line in lines.takeLast(limit)) {
+                    if (line == prev) { repeats++; continue }
+                    flush()
+                    w.write(line); w.write("\n")
+                    prev = line
+                }
+                flush()
+            }
+        }
+        return out
+    }
 
     fun d(msg: String) = write('D', msg, null)
     fun i(msg: String) = write('I', msg, null)

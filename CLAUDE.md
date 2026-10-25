@@ -19,7 +19,7 @@ native/proot/build.sh                     # NDK build of proot -> app jniLibs (l
 ./gradlew --offline :app:compileDebugKotlin   # quickest compile check
 ```
 
-There are no unit tests and lint does not fail the build (`abortOnError = false`). Verify a change by compiling it. Behaviour on a device can only be checked by the user, through the zip from the in-app "Логи → Поделиться" (`app.log`, `session-<id>.log`, `xserver.log`, `logcat.log`, `diagnostics.log`, `device.txt`).
+There are no unit tests and lint does not fail the build (`abortOnError = false`). Verify a change by compiling it. Behaviour on a device can only be checked by the user, through the zip from the in-app "Логи → Поделиться". Read `00-all.log` first: `AppLog.buildCombined` puts the device summary and every log into it, with runs of repeated lines collapsed. The zip also holds the separate files (`app.log`, `session-<id>.log`, `xserver.log`, `logcat.log`, `diagnostics.log`, `device.txt`).
 
 Image scripts are shell: check them with `bash -n` / `shellcheck`. One image can be built locally on an arm64 host with Docker: `images/common/build-image.sh <id> <out-dir> <download-base-url>`.
 
