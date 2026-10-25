@@ -1,0 +1,10 @@
+{
+  "id": "debian-touch",
+  "name": "Debian Touch",
+  "description": "Debian 13 с сенсорной оболочкой: Openbox без рамок, нижняя панель, сетка приложений (rofi) и экранная клавиатура Onboard. Lomiri не используется, см. docs/lomiri.md.",
+  "libc": "glibc",
+  "session_type": "x11",
+  "launch_command": "/usr/local/bin/la-touch-session",
+  "accent": "#4C8BF5",
+  "base_image": "debian:trixie-slim"
+}

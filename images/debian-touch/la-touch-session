@@ -1,0 +1,88 @@
+#!/bin/bash
+# Touch session for Linux ARM: Openbox with undecorated maximized windows, a bottom bar
+# (tint2), an app grid (rofi) and the Onboard keyboard, all on X11 (Termux:X11, DISPLAY=:0).
+# Started by session.sh inside dbus-run-session, as LA_LAUNCH. Every line starts with [touch].
+# Config files come from /usr/local/share/la-touch (written by setup.sh).
+# No systemd, no logind, no accessibility bus: NO_AT_BRIDGE=1 keeps GTK away from AT-SPI.
+
+log()  { echo "[touch] $*"; }
+warn() { echo "[touch] WARNING: $*"; }
+
+share=/usr/local/share/la-touch
+
+export XDG_CURRENT_DESKTOP=Openbox
+export XDG_SESSION_DESKTOP=openbox
+export DESKTOP_SESSION=openbox
+export XDG_SESSION_TYPE=x11
+export XDG_SESSION_CLASS=user
+export GDK_BACKEND=x11
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
+export GIO_USE_VOLUME_MONITOR=unix
+unset WAYLAND_DISPLAY
+export DISPLAY="${DISPLAY:-:0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-root}"
+if mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"; then :; else
+    warn "cannot create $XDG_RUNTIME_DIR"
+fi
+
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    log "distro: ${PRETTY_NAME:-unknown}"
+fi
+log "session bus: ${DBUS_SESSION_BUS_ADDRESS:-<none>}"
+
+for tool in openbox tint2 feh rofi onboard; do
+    command -v "$tool" >/dev/null 2>&1 || warn "$tool is not installed"
+done
+
+# Wait for the X server. The app starts it before the guest, but the socket can lag.
+display_num="${DISPLAY#:}"
+display_num="${display_num%%.*}"
+x_socket="/tmp/.X11-unix/X${display_num}"
+i=0
+while [ ! -S "$x_socket" ] && [ "$i" -lt 60 ]; do
+    sleep 0.5
+    i=$((i + 1))
+done
+if [ ! -S "$x_socket" ]; then
+    warn "X socket $x_socket not found after 30 s. Nothing can be drawn without an X server."
+    exit 1
+fi
+log "X server ready: DISPLAY=$DISPLAY ($x_socket)"
+
+# Resources: DPI and cursor size for a 1272x2800 portrait screen.
+if command -v xrdb >/dev/null 2>&1; then
+    xrdb -merge "$share/Xresources" || warn "xrdb could not merge $share/Xresources"
+fi
+
+# Stop the helpers when the session ends. The keyboard is started by a launcher, not here.
+# Runs on EXIT through the trap below, so shellcheck cannot see the call.
+# shellcheck disable=SC2329
+cleanup() {
+    for pid in $(jobs -p); do
+        kill "$pid" 2>/dev/null || true
+    done
+    pkill -x onboard 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Openbox starts first and the bar after it, so the bar's bottom strut is applied to the
+# windows that are already managed.
+log "starting Openbox (config: $share/openbox-rc.xml)"
+openbox --config-file "$share/openbox-rc.xml" &
+ob_pid=$!
+sleep 1
+
+feh --no-fehbg --bg-fill /usr/share/backgrounds/gnome/adwaita-d.jpg \
+    || warn "wallpaper was not set (feh)"
+
+log "starting the bottom bar (tint2)"
+tint2 -c "$share/tint2rc" &
+
+wait "$ob_pid"
+rc=$?
+log "Openbox exited with code $rc"
+exit "$rc"

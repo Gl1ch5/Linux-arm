@@ -162,6 +162,8 @@ arm64-контейнере базового образа). Результат: `
 | KDE Plasma Mobile (Debian 13, kwin_wayland вложенно в X11, см. `docs/plasma-mobile.md`) | экспериментально |
 | GNOME | этап 4, после исследования |
 | `debian-phosh`: Debian 13 + Phosh (мобильная оболочка GNOME) во вложенном phoc | экспериментально, см. `docs/phosh.md` |
+| `debian-touch`: Debian 13 + Openbox, нижняя панель, сетка приложений и Onboard | мобильный, сенсорный |
+| Lomiri (оболочка Ubuntu Touch) | не собран: нужен systemd, см. `docs/lomiri.md` |
 
 ## Сборка (CI)
 
