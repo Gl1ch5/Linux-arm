@@ -42,6 +42,14 @@ if command -v pulseaudio >/dev/null 2>&1 && [ -f /usr/local/lib/linux-arm/pulse.
         --log-target=stderr >/tmp/.la-audio/pulse.log 2>&1 && log "pulseaudio started" || log "pulseaudio failed, see /tmp/.la-audio/pulse.log"
 fi
 
+# OpenGL probe with its errors, so that one log shows why GL does not work.
+if [ -n "$DISPLAY" ] && command -v glxinfo >/dev/null 2>&1; then
+    probe="$(timeout 15 glxinfo -B 2>&1)"
+    code=$?
+    log "OpenGL probe (glxinfo -B), exit $code:"
+    printf '%s\n' "$probe" | grep -v '^$' | head -n 40 | sed 's/^/[session]   /'
+fi
+
 if command -v dbus-run-session >/dev/null 2>&1; then
     exec dbus-run-session -- sh -c "$LA_LAUNCH"
 else

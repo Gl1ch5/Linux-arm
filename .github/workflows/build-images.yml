@@ -26,19 +26,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - id: ids
         env:
           REQUESTED: ${{ inputs.images }}
           EVENT: ${{ github.event_name }}
+          # The commit before this push: a push of several commits must build every image
+          # any of them touched, not just the last commit's.
+          BEFORE: ${{ github.event.before }}
         run: |
           all=$(ls -d images/*/ | xargs -n1 basename | grep -v '^common$')
           if [ -n "$REQUESTED" ]; then
             ids="$REQUESTED"
-          elif [ "$EVENT" = push ] && git rev-parse -q --verify HEAD~1 >/dev/null \
-               && ! git diff --name-only HEAD~1 HEAD | grep -q '^images/common/\|build-images.yml'; then
+          elif [ "$EVENT" = push ] && git rev-parse -q --verify "$BEFORE^{commit}" >/dev/null \
+               && ! git diff --name-only "$BEFORE" HEAD | grep -q '^images/common/\|build-images.yml'; then
             # Only images whose directory changed in this push.
-            ids=$(git diff --name-only HEAD~1 HEAD | grep '^images/' | cut -d/ -f2 | sort -u | grep -v '^common$' || true)
+            ids=$(git diff --name-only "$BEFORE" HEAD | grep '^images/' | cut -d/ -f2 | sort -u | grep -v '^common$' || true)
           else
             ids="$all"
           fi

@@ -33,6 +33,11 @@ object GpuEnv {
                 // and every GLX client, gnome-shell included, gets no context at all. Zink's
                 // kopper presents through Turnip's Vulkan swapchain, which works here.
                 env["LIBGL_KOPPER_DRI2"] = "1"
+                // Turnip's swapchain would share KGSL buffers with the X server over DRI3,
+                // which Termux:X11 cannot take (gnome-shell died of SIGBUS). The software
+                // WSI path copies finished frames with plain X11 requests instead.
+                // Override in the distro's extra variables with MESA_VK_WSI_DEBUG=.
+                env["MESA_VK_WSI_DEBUG"] = "sw"
             }
         }
         return env

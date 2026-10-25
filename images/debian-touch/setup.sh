@@ -309,7 +309,7 @@ cat > /usr/local/share/applications/la-apps.desktop <<'DESK'
 Type=Application
 Name=Приложения
 Exec=/usr/local/bin/la-touch-apps
-Icon=view-app-grid
+Icon=view-grid
 NoDisplay=true
 DESK
 cat > /usr/local/share/applications/la-keyboard.desktop <<'DESK'
