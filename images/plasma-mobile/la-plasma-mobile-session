@@ -1,0 +1,173 @@
+#!/bin/bash
+# KDE Plasma Mobile session for Linux ARM. Runs inside the guest only.
+#
+#   Termux:X11 (DISPLAY=:0) <- kwin_wayland (X11 backend, windowed) <- plasma_session (mobile shell)
+#
+# session.sh starts this script as LA_LAUNCH inside dbus-run-session. It runs in two stages:
+#   1. Outside KWin: waits for the X server, reads its size and starts kwin_wayland. KWin then
+#      runs this same script again as its session application (--exit-with-session).
+#   2. Inside KWin (LA_PLASMA_IN_KWIN=1, WAYLAND_DISPLAY set by KWin): sets the environment that
+#      startplasmamobile from the plasma-mobile package sets, then runs plasma_session.
+# Every line this script prints starts with "[plasma-mobile]".
+set -euo pipefail
+
+log()  { echo "[plasma-mobile] $*"; }
+warn() { echo "[plasma-mobile] WARNING: $*"; }
+die()  { echo "[plasma-mobile] ERROR: $*"; exit 1; }
+
+pkgver() { dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo "missing"; }
+
+# Phone output. The Termux:X11 root window is used as is. The scale of 2.5 gives a logical
+# size of about 509x1120 for the 1272x2800 panel. Override with LA_PLASMA_SCALE.
+scale="${LA_PLASMA_SCALE:-2.5}"
+default_w=1272
+default_h=2800
+
+# Environment for both stages. Accessibility bridges stay off (no AT-SPI daemon on a phone).
+export NO_AT_BRIDGE=1
+export QT_ACCESSIBILITY=0
+export GTK_A11Y=none
+export KDE_FULL_SESSION=true
+export KDE_SESSION_VERSION=6
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-root}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
+if [ -f /etc/os-release ]; then
+    # shellcheck source=/dev/null
+    . /etc/os-release
+    log "distro: ${PRETTY_NAME:-unknown}"
+fi
+
+# Stage 2: inside KWin. Plasma Mobile itself, on the Wayland socket that KWin created.
+if [ -n "${LA_PLASMA_IN_KWIN:-}" ]; then
+    [ -n "${WAYLAND_DISPLAY:-}" ] || die "KWin did not set WAYLAND_DISPLAY; kwin_wayland failed to start its socket."
+    log "inside kwin_wayland: WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+
+    # Same variables as startplasmamobile (plasma-mobile package).
+    export QT_QPA_PLATFORM=wayland
+    export QT_QPA_PLATFORMTHEME=KDE
+    export EGL_PLATFORM=wayland
+    export QT_QUICK_CONTROLS_STYLE=org.kde.breeze
+    export QT_QUICK_CONTROLS_MOBILE=true
+    export QT_ENABLE_GLYPH_CACHE_WORKAROUND=1
+    export PLASMA_INTEGRATION_USE_PORTAL=1
+    export PLASMA_PLATFORM=phone:handset
+    export PLASMA_DEFAULT_SHELL=org.kde.plasma.mobileshell
+    export XDG_CONFIG_DIRS="$HOME/.config/plasma-mobile:/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"
+    export XDG_SESSION_TYPE=wayland
+    export XDG_SESSION_CLASS=user
+    export XDG_CURRENT_DESKTOP=KDE
+    export XDG_SESSION_DESKTOP=KDE
+    export DESKTOP_SESSION=plasma
+    # The X server is only the window of KWin. No XWayland runs, so DISPLAY is removed.
+    unset DISPLAY
+
+    # Applies the mobile defaults (input method, look and feel, panels). Failure is not fatal.
+    if command -v plasma-mobile-envmanager >/dev/null 2>&1; then
+        if ! QT_QPA_PLATFORM=offscreen plasma-mobile-envmanager --apply-settings; then
+            warn "plasma-mobile-envmanager failed; the shell starts with its built-in defaults"
+        fi
+    else
+        warn "plasma-mobile-envmanager is missing; the mobile defaults are not applied"
+    fi
+
+    log "starting plasma_session (shell $PLASMA_DEFAULT_SHELL)"
+    rc=0
+    plasma_session || rc=$?
+    log "plasma_session ended with code $rc"
+    exit "$rc"
+fi
+
+# Stage 1: outside KWin. Needs the X server of the app and the Plasma tools.
+[ -n "${DISPLAY:-}" ] || die "DISPLAY is not set: the X server of the app did not start."
+for tool in kwin_wayland plasma_session xwininfo; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed: reinstall the image."
+done
+log "packages: kwin-wayland=$(pkgver kwin-wayland) plasma-workspace=$(pkgver plasma-workspace) plasma-mobile=$(pkgver plasma-mobile)"
+log "session bus: ${DBUS_SESSION_BUS_ADDRESS:-<none>}"
+
+# Wait for the X server. The app starts it before the guest, but the socket can lag.
+display_num="${DISPLAY#:}"
+display_num="${display_num%%.*}"
+x_socket="/tmp/.X11-unix/X${display_num}"
+i=0
+while [ ! -S "$x_socket" ] && [ "$i" -lt 60 ]; do
+    sleep 0.5
+    i=$((i + 1))
+done
+[ -S "$x_socket" ] || die "X socket $x_socket not found after 30 s."
+log "X server ready: DISPLAY=$DISPLAY ($x_socket)"
+
+# Output size. Termux:X11 first reports a fallback size, then resizes when the Android surface
+# attaches, so wait until the root geometry stops changing.
+root_geometry() {
+    xwininfo -root 2>/dev/null | awk '/Width:/ { w = $2 } /Height:/ { h = $2 } END { if (w && h) print w " " h }' || true
+}
+output_w=$default_w
+output_h=$default_h
+sample=""
+for _ in $(seq 1 300); do
+    sample="$(root_geometry)"
+    if [ -n "$sample" ]; then
+        break
+    fi
+    sleep 0.1
+done
+if [ -z "$sample" ]; then
+    warn "X server $DISPLAY did not report its size; using ${default_w}x${default_h}"
+else
+    last="$sample"
+    stable=0
+    for _ in $(seq 1 100); do
+        sample="$(root_geometry)"
+        if [ "$sample" = "$last" ]; then
+            stable=$((stable + 1))
+        else
+            stable=0
+            last="$sample"
+        fi
+        if [ "$stable" -ge 5 ]; then
+            break
+        fi
+        sleep 0.1
+    done
+    w="" h=""
+    read -r w h <<<"$last" || true
+    if [[ "$w" =~ ^[0-9]+$ && "$h" =~ ^[0-9]+$ ]]; then
+        output_w=$w
+        output_h=$h
+    fi
+    log "X root geometry: ${output_w}x${output_h}"
+fi
+
+# Software OpenGL is a warning only: KWin then runs slowly but still starts.
+glx_out="$(timeout 10 glxinfo -B 2>/dev/null || true)"
+renderer="$(printf '%s\n' "$glx_out" | sed -n 's/^OpenGL renderer string: //p')"
+if [ -n "$renderer" ]; then
+    log "OpenGL renderer: $renderer"
+    case "$renderer" in
+        *llvmpipe*) warn "software rendering (llvmpipe): the shell will be slow; check the GPU driver in the app" ;;
+    esac
+else
+    warn "glxinfo reported no OpenGL renderer; kwin_wayland will probably fail"
+fi
+
+# kwin_wayland with the X11 backend: a windowed output of the root size. --no-lockscreen,
+# --no-global-shortcuts and --no-kactivities keep the phone session small and quiet.
+# The session application is this script again, with LA_PLASMA_IN_KWIN=1.
+self="$(readlink -f "$0")"
+export LA_PLASMA_IN_KWIN=1
+unset WAYLAND_DISPLAY
+log "starting kwin_wayland: X11 display $DISPLAY, ${output_w}x${output_h}, scale $scale"
+rc=0
+kwin_wayland --x11-display "$DISPLAY" --width "$output_w" --height "$output_h" --scale "$scale" \
+    --no-lockscreen --no-global-shortcuts --no-kactivities \
+    --inputmethod maliit-keyboard \
+    --exit-with-session "$self" || rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    log "kwin_wayland ended normally (exit 0)"
+    exit 0
+fi
+warn "kwin_wayland exited with code $rc. Look above for 'Failed', EGL or GLX errors, or unknown options."
+exit "$rc"

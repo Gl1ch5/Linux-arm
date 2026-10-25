@@ -1,0 +1,10 @@
+{
+  "id": "plasma-mobile",
+  "name": "KDE Plasma Mobile",
+  "description": "Debian 13 с Plasma Mobile (Plasma 6.3). kwin_wayland работает вложенно в X11 (Termux:X11). Тёмная тема Breeze, сенсорный интерфейс, экранная клавиатура Maliit, приложения Kirigami.",
+  "libc": "glibc",
+  "session_type": "wayland-nested",
+  "launch_command": "/usr/local/bin/la-plasma-mobile-session",
+  "accent": "#3DAEE9",
+  "base_image": "debian:trixie-slim"
+}

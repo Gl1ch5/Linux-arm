@@ -159,6 +159,7 @@ arm64-контейнере базового образа). Результат: `
 | `debian-xfce`: Debian 13 + XFCE, vkcube/glxinfo | этап 1 |
 | Omarchy (Arch Linux ARM + Hyprland, вложенно через Weston) | этап 3 |
 | Десктоп в стиле macOS (собственное название, без брендинга Apple) | этап 3 |
+| KDE Plasma Mobile (Debian 13, kwin_wayland вложенно в X11, см. `docs/plasma-mobile.md`) | экспериментально |
 | GNOME | этап 4, после исследования |
 
 ## Сборка (CI)
