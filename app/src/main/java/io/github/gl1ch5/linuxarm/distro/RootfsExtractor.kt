@@ -129,7 +129,9 @@ object RootfsExtractor {
             }
 
             override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
-                Files.deleteIfExists(dir)
+                // A process still writing into the tree (a session being started) can leave
+                // a directory non-empty; the rest is deleted anyway.
+                runCatching { Files.deleteIfExists(dir) }
                 return FileVisitResult.CONTINUE
             }
         })

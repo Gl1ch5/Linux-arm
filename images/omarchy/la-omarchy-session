@@ -242,9 +242,10 @@ fi
 
 # 6. Hyprland, as a Wayland client of Weston. DISPLAY is removed so Hyprland does not treat
 #    the X server as its host; its own XWayland is started by Hyprland.
-hypr_args=()
+# proot runs everything as (fake) root, and Hyprland refuses root unless told otherwise.
+hypr_args=(--i-am-really-stupid)
 if [[ -f "$HYPRLAND_CONFIG" ]]; then
-  hypr_args=(--config "$HYPRLAND_CONFIG")
+  hypr_args+=(--config "$HYPRLAND_CONFIG")
 fi
 log "starting Hyprland: WAYLAND_DISPLAY=$WESTON_SOCKET, HOME=$HOME, config=${HYPRLAND_CONFIG}"
 set +e

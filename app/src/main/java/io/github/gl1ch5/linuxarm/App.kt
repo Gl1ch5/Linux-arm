@@ -14,6 +14,7 @@ import io.github.gl1ch5.linuxarm.runtime.SessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** Extends Termux:X11's application class, which the embedded display activity relies on. */
 class App : LorieApp() {
@@ -39,6 +40,7 @@ class App : LorieApp() {
         Thread.setDefaultUncaughtExceptionHandler(CrashLogger(Thread.getDefaultUncaughtExceptionHandler()))
         catalog = CatalogRepository(this, paths).also { it.loadCached() }
         distros = DistroRepository(paths).also { it.load() }
+        scope.launch(Dispatchers.IO) { distros.emptyTrash() }
         drivers = DriverManager(paths).also { it.load() }
         sessions = SessionManager(this, paths, distros, drivers)
         controls = io.github.gl1ch5.linuxarm.controls.ControlsRepository(java.io.File(paths.config, "controls.json"))

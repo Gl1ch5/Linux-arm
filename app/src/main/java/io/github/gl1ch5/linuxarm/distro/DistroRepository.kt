@@ -106,12 +106,28 @@ class DistroRepository(private val paths: AppPaths) {
         }
     }
 
+    private val trash get() = File(paths.distros.parentFile, "trash")
+
+    /**
+     * Moves the distro out of the way at once (a rename), so that starting or installing
+     * it again right away cannot touch half-deleted files, then deletes it.
+     */
     fun uninstall(id: String) {
         AppLog.i("uninstall $id")
-        RootfsExtractor.deleteTree(paths.distroDir(id))
         _installed.update { it - id }
         _configs.update { it - id }
         setStatus(id, DistroStatus.NotInstalled)
+        val dir = paths.distroDir(id)
+        trash.mkdirs()
+        val moved = File(trash, "$id-${System.nanoTime()}")
+        val target = if (dir.renameTo(moved)) moved else dir
+        runCatching { RootfsExtractor.deleteTree(target) }
+            .onFailure { AppLog.w("could not delete all of $target; it is retried on the next start", it) }
+    }
+
+    /** Leftovers of interrupted uninstalls. */
+    fun emptyTrash() {
+        trash.listFiles()?.forEach { runCatching { RootfsExtractor.deleteTree(it) } }
     }
 }
 
