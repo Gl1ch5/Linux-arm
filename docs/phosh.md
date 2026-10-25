@@ -66,8 +66,10 @@ gnome-session. Все строки лога начинаются с `[phosh]`.
 - **Тёмная тема.** `org.gnome.desktop.interface color-scheme=prefer-dark`, акцент `blue`.
 - **Избранное.** `mobi.phosh.shell favorites`: Console, Epiphany, Nautilus, Text Editor,
   Калькулятор и настройки Phosh.
-- **Без блокировки.** `lock-enabled=false`, `idle-delay=0`, `require-unlock=false`. Последний
-  нужен: без пароля пользователя root разблокировать экран было бы нечем.
+- **Без блокировки.** `lock-enabled=false`, `idle-delay=0`, `require-unlock=false`. Но при
+  старте Phosh всё равно показывает экран блокировки и проверяет код через PAM. У root нет
+  пароля, поэтому `/etc/pam.d/phosh` принимает любой код: введите любую цифру и нажмите
+  «Unlock».
 - Все значения заданы в `/etc/dconf/db/local.d/00-linux-arm`, пользователь может их менять.
 
 ## Что не проверено

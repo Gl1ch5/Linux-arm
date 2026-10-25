@@ -110,4 +110,14 @@ Icon=utilities-terminal
 Categories=System;
 DESK
 
+# Phosh always starts on its lock screen and checks the passcode through PAM ("phosh"
+# service). The guest's root has no password and proot has no real login, so any code
+# unlocks: type one digit and press Unlock. The phone itself is protected by Android.
+cat > /etc/pam.d/phosh <<'PAM'
+auth     sufficient pam_permit.so
+account  sufficient pam_permit.so
+password sufficient pam_permit.so
+session  optional   pam_permit.so
+PAM
+
 bash /la-build/common/cleanup.sh

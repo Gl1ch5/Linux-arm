@@ -51,6 +51,7 @@ Debug builds are signed with the committed public `app/debug.keystore`, so every
 - `Proot.baseGuestEnv` sets the base variables. `GpuEnv` adds the Turnip/zink variables. Per-distro `extraEnv` comes from `DistroConfig`.
 - A GPU driver is never installed into a distro. Each driver version is unpacked to `files/drivers/<id>` and bind-mounted at `/opt/gpu-driver`.
 - `FakeProc` binds replacements over `/proc` files that Android hides.
+- Termux:X11 has DRI3 but no DRI3 1.2 + Present 1.2 ("multibuffer") and no DRM render node. Mesa's GLX and EGL refuse zink in that case unless `LIBGL_KOPPER_DRI2=1` is set, which `GpuEnv` does. wlroots' GLES2 renderer cannot start at all (no DRM fd), and MIT-SHM cannot attach proot's emulated SysV segments.
 
 **Display.** `display/DisplayActivity` extends Termux:X11's `com.termux.x11.MainActivity`, which keeps its rendering and touch/trackpad input. On top it adds:
 - three- and four-finger gestures, intercepted in `dispatchTouchEvent`;

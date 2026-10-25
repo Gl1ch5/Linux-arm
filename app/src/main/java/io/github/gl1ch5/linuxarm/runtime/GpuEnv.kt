@@ -28,6 +28,11 @@ object GpuEnv {
             else -> {
                 env["MESA_LOADER_DRIVER_OVERRIDE"] = "zink"
                 env["GALLIUM_DRIVER"] = "zink"
+                // Termux:X11 has DRI3 but not DRI3 1.2 + Present 1.2 ("multibuffer"). Without
+                // that, Mesa's GLX refuses an explicitly requested zink ("DRI3 not available")
+                // and every GLX client, gnome-shell included, gets no context at all. Zink's
+                // kopper presents through Turnip's Vulkan swapchain, which works here.
+                env["LIBGL_KOPPER_DRI2"] = "1"
             }
         }
         return env

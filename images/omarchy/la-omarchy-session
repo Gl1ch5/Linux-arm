@@ -18,7 +18,7 @@ OMARCHY_HOME=/home/omarchy
 HYPRLAND_CONFIG="$OMARCHY_HOME/.config/hypr/hyprland.lua"
 # Weston renderers to try in order. gl uses KGSL through the Mesa below. pixman is a CPU
 # fallback; Hyprland then uses the shared-memory output path, which is slower.
-WESTON_RENDERERS="${OMARCHY_WESTON_RENDERERS:-gl pixman}"
+WESTON_RENDERERS="${OMARCHY_WESTON_RENDERERS:-gl-zink gl pixman}"
 
 log() { printf '[omarchy] %s\n' "$*"; }
 die() { printf '[omarchy] ERROR: %s\n' "$*"; exit 1; }
@@ -69,8 +69,15 @@ for path in "$MESA_PREFIX/lib/libvulkan_freedreno.so" "$MESA_PREFIX/lib/dri/kgsl
 done
 [[ -x "$HYPRLAND_STAGE/bin/Hyprland" ]] || die "missing $HYPRLAND_STAGE/bin/Hyprland, reinstall the image."
 
-# 2. GPU environment. Unset the Turnip/Zink variables the app sets, then use this image's
-#    KGSL Mesa, exactly as the reference does for its compositor.
+# 2. GPU environment. Weston first tries the app's Turnip + Zink (renderer gl-zink): it
+#    works on the Termux:X11 server, which has no DRI3, while the KGSL Mesa below needs
+#    DRI3 for an X11 EGL display. Keep the app's variables for that, then unset them and
+#    use this image's KGSL Mesa for everything else, as the reference does.
+app_gpu_env=()
+for v in LD_LIBRARY_PATH LIBGL_DRIVERS_PATH __EGL_VENDOR_LIBRARY_FILENAMES __GLX_VENDOR_LIBRARY_NAME \
+  GALLIUM_DRIVER MESA_LOADER_DRIVER_OVERRIDE VK_ICD_FILENAMES TU_DEBUG LIBGL_KOPPER_DRI2; do
+  if [[ -n "${!v:-}" ]]; then app_gpu_env+=("$v=${!v}"); fi
+done
 unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH __EGL_VENDOR_LIBRARY_FILENAMES GBM_BACKENDS_PATH \
   __GLX_VENDOR_LIBRARY_NAME GALLIUM_DRIVER MESA_LOADER_DRIVER_OVERRIDE VK_ICD_FILENAMES \
   LIBGL_ALWAYS_SOFTWARE TU_DEBUG WAYLAND_DISPLAY
@@ -186,10 +193,20 @@ export OMARCHY_OUTPUT_HEIGHT="$output_h"
 command -v weston >/dev/null 2>&1 || die "weston is not installed: run 'pacman -S weston' in the guest."
 
 start_weston() {
-  local renderer="$1" _
+  local renderer="$1" _ prefix=()
   rm -f "$RUNTIME_DIR/$WESTON_SOCKET" "$RUNTIME_DIR/$WESTON_SOCKET.lock"
-  log "starting Weston: x11 backend on $DISPLAY, renderer=$renderer, ${output_w}x${output_h}, shell=kiosk"
-  weston -B x11 --renderer="$renderer" --shell=kiosk --socket="$WESTON_SOCKET" \
+  if [[ "$renderer" == gl-zink ]]; then
+    if [[ ${#app_gpu_env[@]} -eq 0 || " ${app_gpu_env[*]} " != *" MESA_LOADER_DRIVER_OVERRIDE=zink "* ]]; then
+      log "skipping renderer gl-zink: the app did not pass a Turnip driver (select one in the app)"
+      return 1
+    fi
+    # Pixman's MIT-SHM path cannot work under proot either (the X server cannot attach
+    # proot's emulated SysV segments), so this is the path that has to work.
+    prefix=(env -u FD_KGSL_ENABLE_DMABUF -u LIBGL_DRIVERS_PATH "${app_gpu_env[@]}")
+    renderer=gl
+  fi
+  log "starting Weston: x11 backend on $DISPLAY, renderer=$1, ${output_w}x${output_h}, shell=kiosk"
+  "${prefix[@]}" weston -B x11 --renderer="$renderer" --shell=kiosk --socket="$WESTON_SOCKET" \
     --width="$output_w" --height="$output_h" --scale=1 --idle-time=0 &
   weston_pid=$!
   for _ in $(seq 1 150); do
@@ -219,7 +236,7 @@ for renderer in $WESTON_RENDERERS; do
   fi
 done
 [[ -n "$started_renderer" ]] || die "Weston did not start with any renderer ($WESTON_RENDERERS). See the weston lines above."
-if [[ "$started_renderer" != gl ]]; then
+if [[ "$started_renderer" != gl* ]]; then
   log "WARNING: Weston runs with renderer=$started_renderer; Hyprland uses the shared-memory output path (slower)."
 fi
 
