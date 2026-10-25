@@ -40,10 +40,12 @@ class SessionService : LifecycleService() {
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification("Linux ARM", "Готово"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         lifecycleScope.launch {
-            combine(app.sessions.running, app.distros.status) { r, s -> r to s }.collect { (running, status) ->
+            combine(app.sessions.running, app.distros.status, app.sessions.guard.count) { r, s, n -> Triple(r, s, n) }
+                .collect { (running, status, procs) ->
                 val installing = status.entries.firstOrNull { it.value is DistroStatus.Downloading || it.value is DistroStatus.Extracting }
                 val (title, text) = when {
-                    running != null -> "Запущен: ${nameOf(running.distroId)}" to "GPU: ${running.gpu}"
+                    running != null -> "Запущен: ${nameOf(running.distroId)}" to
+                        "GPU: ${running.gpu} · процессов: $procs"
                     installing != null -> "Установка: ${nameOf(installing.key)}" to when (val st = installing.value) {
                         is DistroStatus.Downloading -> "Загрузка ${(st.fraction * 100).toInt()}%"
                         is DistroStatus.Extracting -> "Распаковка ${(st.fraction * 100).toInt()}%"

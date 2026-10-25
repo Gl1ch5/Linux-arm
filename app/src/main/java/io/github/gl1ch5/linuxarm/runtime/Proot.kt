@@ -72,6 +72,11 @@ class Proot(private val paths: AppPaths) {
             "TMPDIR" to "/tmp",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "XDG_RUNTIME_DIR" to "/tmp/runtime-root",
+            // Fewer background processes, see ProcessGuard: no accessibility bus and no
+            // gvfs volume monitors (five processes under GNOME), neither works in proot.
+            "NO_AT_BRIDGE" to "1",
+            "GTK_A11Y" to "none",
+            "GIO_USE_VOLUME_MONITOR" to "unix",
         ).apply { if (display != null) put("DISPLAY", display) }
     }
 }

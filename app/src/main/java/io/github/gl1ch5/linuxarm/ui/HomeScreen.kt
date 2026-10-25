@@ -67,7 +67,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -95,10 +97,12 @@ fun HomeScreen(nav: NavController, snackbar: SnackbarHostState) {
     val installed by app.distros.installed.collectAsState()
     val status by app.distros.status.collectAsState()
     var phantom by remember { mutableStateOf<PhantomProcesses.Status?>(null) }
+    var batteryExempt by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         scope.launch { phantom = withContext(Dispatchers.IO) { PhantomProcesses.status(ctx) } }
+        batteryExempt = PhantomProcesses.ignoresBatteryOptimizations(ctx)
     }
     LaunchedEffect(Unit) {
         refreshing = true
@@ -129,8 +133,10 @@ fun HomeScreen(nav: NavController, snackbar: SnackbarHostState) {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            if (phantom == PhantomProcesses.Status.ENABLED) {
-                item(span = { GridItemSpan(maxLineSpan) }) { PhantomWarning() }
+            if (phantom == PhantomProcesses.Status.ENABLED || !batteryExempt) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    KeepAliveCard(phantom == PhantomProcesses.Status.ENABLED, batteryExempt)
+                }
             }
             if (refreshing && entries.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -168,27 +174,61 @@ fun HomeScreen(nav: NavController, snackbar: SnackbarHostState) {
     }
 }
 
+/**
+ * What keeps Android from closing the desktop. The process guard works on its own; the
+ * battery exemption and the developer option are one-time steps that make it bulletproof.
+ */
 @Composable
-private fun PhantomWarning() {
+private fun KeepAliveCard(restricted: Boolean, batteryExempt: Boolean) {
     val ctx = LocalContext.current
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+    val clipboard = LocalClipboardManager.current
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.Warning, null)
                 Spacer(Modifier.width(8.dp))
-                Text("Android может убивать процессы Linux", style = MaterialTheme.typography.titleMedium)
+                Text("Защита от закрытия", style = MaterialTheme.typography.titleMedium)
             }
-            Text(
-                "Ограничение дочерних процессов включено. Рабочий стол запускает десятки процессов, и система " +
-                    "будет закрывать их («phantom process killer»). Включите «Параметры разработчика» " +
-                    "(7 раз нажмите «Номер сборки» в разделе «Об устройстве»), затем в них — " +
-                    "«Отключить ограничения дочерних процессов».",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            FilledTonalButton(onClick = {
-                runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
-                    .onFailure { ctx.startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
-            }) { Text("Открыть параметры разработчика") }
+            if (!batteryExempt) {
+                Text(
+                    "Разрешите работу в фоне без ограничений: иначе оболочка телефона (ColorOS, MIUI, One UI) " +
+                        "может закрыть рабочий стол, когда экран погаснет или вы переключитесь на другое приложение.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = {
+                        runCatching { ctx.startActivity(PhantomProcesses.batteryExemptionIntent(ctx)) }
+                            .onFailure { ctx.startActivity(PhantomProcesses.appDetailsIntent(ctx)) }
+                    }) { Text("Разрешить") }
+                    TextButton(onClick = { ctx.startActivity(PhantomProcesses.appDetailsIntent(ctx)) }) {
+                        Text("О приложении")
+                    }
+                }
+            }
+            if (restricted) {
+                Text(
+                    "Ограничение дочерних процессов включено: Android закрывает процессы приложений сверх 32. " +
+                        "Приложение само держит их число ниже предела — закрывает фоновые службы рабочего стола, " +
+                        "которые перезапустятся при необходимости (миниатюры, индексатор, монитор дисков). " +
+                        "Обычно этого хватает. Чтобы снять ограничение совсем, есть два способа:",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "1. «Параметры разработчика» → «Отключить ограничения дочерних процессов».\n" +
+                        "2. Один раз выполнить с компьютера (или через Shizuku) команду ниже — после этого приложение " +
+                        "само снимает ограничение при каждом запуске, параметры разработчика можно выключить.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = {
+                        runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
+                            .onFailure { ctx.startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
+                    }) { Text("Параметры разработчика") }
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(PhantomProcesses.GRANT_COMMAND)) }) {
+                        Text("Копировать команду")
+                    }
+                }
+            }
         }
     }
 }

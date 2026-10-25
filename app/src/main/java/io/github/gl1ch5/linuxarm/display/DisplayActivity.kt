@@ -71,11 +71,11 @@ class DisplayActivity : com.termux.x11.MainActivity() {
     // --- Multi-finger gestures -------------------------------------------------------
 
     private var tracking = false
+    private var frozen = false
     private var maxPointers = 0
-    private var startX = 0f
-    private var startY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
+    private val startPos = HashMap<Int, Pair<Float, Float>>()
+    private var dx = 0f
+    private var dy = 0f
     private var startTime = 0L
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -86,41 +86,59 @@ class DisplayActivity : com.termux.x11.MainActivity() {
                 maxPointers = maxOf(maxPointers, ev.pointerCount)
                 if (!tracking && ev.pointerCount >= 3) {
                     tracking = true
-                    centroid(ev).let { (x, y) -> startX = x; startY = y; lastX = x; lastY = y }
+                    frozen = false
+                    dx = 0f; dy = 0f
+                    startPos.clear()
                     startTime = SystemClock.uptimeMillis()
                     // Take the touch stream away from the X input handler.
                     val cancel = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
                     super.dispatchTouchEvent(cancel)
                     cancel.recycle()
                 }
+                if (tracking && !frozen) {
+                    // A finger that lands late starts measuring from where it landed.
+                    for (j in 0 until ev.pointerCount) startPos.getOrPut(ev.getPointerId(j)) { ev.getX(j) to ev.getY(j) }
+                }
             }
         }
         if (!tracking) return super.dispatchTouchEvent(ev)
         when (ev.actionMasked) {
-            MotionEvent.ACTION_MOVE -> centroid(ev).let { (x, y) -> lastX = x; lastY = y }
+            MotionEvent.ACTION_MOVE -> if (!frozen) measure(ev)
+            // Fingers never lift at exactly the same time. Measuring the centroid after the
+            // first one lifts makes it jump by a third of the finger spread, which turned
+            // every tap into a "swipe" — so the movement is fixed at the first lift.
+            MotionEvent.ACTION_POINTER_UP -> { if (!frozen) measure(ev); frozen = true }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 tracking = false
-                if (ev.actionMasked == MotionEvent.ACTION_UP) classify()?.let { onGesture(it) }
+                if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                    val g = classify()
+                    AppLog.d("gesture: ${maxPointers} fingers, moved ${"%.0f".format(hypot(dx, dy) / resources.displayMetrics.density)}dp in ${SystemClock.uptimeMillis() - startTime}ms -> ${g?.id}")
+                    g?.let { onGesture(it) }
+                } else {
+                    AppLog.d("gesture cancelled by the system (OEM three-finger gesture?)")
+                }
             }
         }
         return true
     }
 
-    private fun centroid(ev: MotionEvent): Pair<Float, Float> {
-        var x = 0f; var y = 0f
-        for (i in 0 until ev.pointerCount) { x += ev.getX(i); y += ev.getY(i) }
-        return x / ev.pointerCount to y / ev.pointerCount
+    /** Average movement of the fingers since each of them touched down. */
+    private fun measure(ev: MotionEvent) {
+        var sx = 0f; var sy = 0f; var n = 0
+        for (i in 0 until ev.pointerCount) {
+            val s = startPos[ev.getPointerId(i)] ?: continue
+            sx += ev.getX(i) - s.first; sy += ev.getY(i) - s.second; n++
+        }
+        if (n > 0) { dx = sx / n; dy = sy / n }
     }
 
     private fun classify(): Gesture? {
         val density = resources.displayMetrics.density
-        val dx = lastX - startX
-        val dy = lastY - startY
         val dist = hypot(dx, dy) / density
         val dt = SystemClock.uptimeMillis() - startTime
         val four = maxPointers >= 4
         return when {
-            dist < 30 && dt < 500 -> if (four) Gesture.TAP4 else Gesture.TAP3
+            dist < 40 && dt < 700 -> if (four) Gesture.TAP4 else Gesture.TAP3
             dist < 60 -> null
             abs(dy) > abs(dx) -> if (dy < 0) (if (four) Gesture.UP4 else Gesture.UP3) else (if (four) Gesture.DOWN4 else Gesture.DOWN3)
             four -> null

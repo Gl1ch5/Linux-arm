@@ -6,6 +6,8 @@ import io.github.gl1ch5.linuxarm.core.AppLog
 import io.github.gl1ch5.linuxarm.core.AppPaths
 import io.github.gl1ch5.linuxarm.core.DeviceInfo
 import io.github.gl1ch5.linuxarm.core.LoggedProcess
+import io.github.gl1ch5.linuxarm.core.PhantomProcesses
+import io.github.gl1ch5.linuxarm.core.ProcessGuard
 import io.github.gl1ch5.linuxarm.core.Processes
 import io.github.gl1ch5.linuxarm.distro.DistroConfig
 import io.github.gl1ch5.linuxarm.distro.DistroRepository
@@ -13,7 +15,9 @@ import io.github.gl1ch5.linuxarm.distro.DistroStatus
 import io.github.gl1ch5.linuxarm.distro.InstalledImage
 import io.github.gl1ch5.linuxarm.driver.DriverManager
 import io.github.gl1ch5.linuxarm.driver.InstalledDriver
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -38,6 +42,8 @@ class SessionManager(
     private var audio: AudioBridge? = null
     private var session: LoggedProcess? = null
     private val lock = Mutex()
+    /** Keeps the number of Linux processes under Android's phantom process limit. */
+    val guard = ProcessGuard(CoroutineScope(SupervisorJob() + Dispatchers.IO))
 
     private val _running = MutableStateFlow<Running?>(null)
     val running: StateFlow<Running?> = _running
@@ -146,18 +152,24 @@ class SessionManager(
         audio = AudioBridge(rootfs).also { it.start() }
         _running.value = Running(id, gpuLabel, useGpu)
         distros.setStatus(id, DistroStatus.Running)
+        guard.start {
+            PhantomProcesses.status(context).let { it == PhantomProcesses.Status.ENABLED || it == PhantomProcesses.Status.UNKNOWN }
+        }
 
         Thread {
             val code = p.waitFor()
             AppLog.i("session $id ended with code $code")
             if (session === p) {
                 session = null
+                guard.stop()
                 xserver.stop()
                 audio?.stop(); audio = null
                 logcat?.destroy(); logcat = null
                 _running.value = null
                 distros.setStatus(id, DistroStatus.Installed)
-                if (code != 0 && code != 143 && code != 137) tell("Сессия $id завершилась с кодом $code. Лог: session-$id.log")
+                // 137 = SIGKILL that the app did not send (a user stop clears `session` first).
+                if (code == 137) tell("Android принудительно закрыл сессию $id. Откройте «Защита от закрытия» на главном экране.")
+                else if (code != 0 && code != 143) tell("Сессия $id завершилась с кодом $code. Лог: session-$id.log")
             }
         }.apply { isDaemon = true; name = "wait-session" }.start()
     }
@@ -204,6 +216,7 @@ class SessionManager(
         val r = _running.value
         session?.let { AppLog.i("stopping session ${it.name}"); it.destroy() }
         session = null
+        guard.stop()
         xserver.stop()
         audio?.stop(); audio = null
         logcat?.destroy(); logcat = null
