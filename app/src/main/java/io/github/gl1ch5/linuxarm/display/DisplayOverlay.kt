@@ -247,7 +247,7 @@ private fun DisplayMenu(activity: DisplayActivity, config: ControlsConfig, onClo
                     MenuItem(Icons.Filled.Stop, "Остановить") { act(AppAction.STOP) },
                 )
                 Text(
-                    "Жесты: " + listOf("3tap", "3up", "3down").joinToString(" · ") { id ->
+                    "Назад — это меню. Жесты: " + listOf("3tap", "3up", "3down").joinToString(" · ") { id ->
                         val g = io.github.gl1ch5.linuxarm.controls.Gesture.entries.first { it.id == id }
                         "${g.label.lowercase()} — ${Actions.describe(config.gesture(g)).lowercase()}"
                     },

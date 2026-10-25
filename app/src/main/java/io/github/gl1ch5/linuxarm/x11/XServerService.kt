@@ -29,7 +29,16 @@ class XServerService : Service() {
             return START_NOT_STICKY
         }
         if (started) return START_NOT_STICKY
-        val tmp = intent?.getStringExtra(EXTRA_TMPDIR) ?: return START_NOT_STICKY
+        // When the server exits the process during start-up, Android restarts the service
+        // and redelivers that same start command, over and over, even after the app moved
+        // on to another distro. Only the start the app asked for last may run.
+        val token = intent?.getStringExtra(EXTRA_TOKEN)
+        if (flags and (START_FLAG_REDELIVERY or START_FLAG_RETRY) != 0 || token == null || token != currentToken(this)) {
+            AppLog.w("xserver: ignoring a stale start command (flags=$flags)")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val tmp = intent.getStringExtra(EXTRA_TMPDIR) ?: return START_NOT_STICKY
         val xkb = intent.getStringExtra(EXTRA_XKB)
         val args = intent.getStringArrayExtra(EXTRA_ARGS) ?: arrayOf(":0")
         started = true
@@ -76,6 +85,16 @@ class XServerService : Service() {
         const val EXTRA_TMPDIR = "tmpdir"
         const val EXTRA_XKB = "xkb"
         const val EXTRA_ARGS = "args"
+        const val EXTRA_TOKEN = "token"
+
+        /** Written by the app process before each start; both processes read the same file. */
+        private fun tokenFile(ctx: android.content.Context) = File(ctx.filesDir, "xserver.token")
+
+        fun setCurrentToken(ctx: android.content.Context, token: String) {
+            runCatching { tokenFile(ctx).writeText(token) }
+        }
+
+        fun currentToken(ctx: android.content.Context): String? = runCatching { tokenFile(ctx).readText() }.getOrNull()
         const val PROCESS_SUFFIX = ":xserver"
     }
 }

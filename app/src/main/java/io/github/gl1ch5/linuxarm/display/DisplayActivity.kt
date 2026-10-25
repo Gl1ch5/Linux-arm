@@ -3,6 +3,8 @@ package io.github.gl1ch5.linuxarm.display
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -68,6 +70,22 @@ class DisplayActivity : com.termux.x11.MainActivity() {
         super.onResume()
     }
 
+    // --- Back gesture -----------------------------------------------------------------
+
+    /**
+     * The system back gesture (or button) opens and closes the menu. Multi-finger gestures
+     * are not reliable on every phone: ColorOS, for one, takes three fingers for itself.
+     * A mouse's back button keeps its Termux:X11 meaning (right click).
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val mouse = event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)
+        if (event.keyCode != KeyEvent.KEYCODE_BACK || mouse) return super.dispatchKeyEvent(event)
+        if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0 && !event.isCanceled && !editingButtons.value) {
+            menuOpen.value = !menuOpen.value
+        }
+        return true
+    }
+
     // --- Multi-finger gestures -------------------------------------------------------
 
     private var tracking = false
@@ -77,6 +95,7 @@ class DisplayActivity : com.termux.x11.MainActivity() {
     private var dx = 0f
     private var dy = 0f
     private var startTime = 0L
+    private var cancelHintShown = false
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (editingButtons.value || menuOpen.value) return super.dispatchTouchEvent(ev)
@@ -116,6 +135,10 @@ class DisplayActivity : com.termux.x11.MainActivity() {
                     g?.let { onGesture(it) }
                 } else {
                     AppLog.d("gesture cancelled by the system (OEM three-finger gesture?)")
+                    if (!cancelHintShown) {
+                        cancelHintShown = true
+                        toast("Жесты тремя пальцами забирает система. Меню открывается жестом «назад».")
+                    }
                 }
             }
         }

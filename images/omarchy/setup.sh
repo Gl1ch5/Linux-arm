@@ -76,9 +76,19 @@ done
 #    -Syu; the patched Hyprland/Aquamarine/Mesa live in /opt with their own libraries.
 harden_pacman_conf
 retry 3 pacman -Sy --noconfirm --needed archlinux-keyring
-retry 3 pacman -Syu --noconfirm --needed weston xorg-xwininfo
+retry 3 pacman -Syu --noconfirm --needed weston xorg-xwininfo xkeyboard-config
 command -v weston >/dev/null || die "weston was not installed"
 command -v xwininfo >/dev/null || die "xwininfo was not installed"
+
+# The app's X server reads keymaps from the rootfs at usr/share/X11/xkb, from outside the
+# guest, so an absolute symlink there (newer xkeyboard-config points it at
+# /usr/share/xkeyboard-config-2) would resolve against Android's root. Make it relative.
+xkb=/usr/share/X11/xkb
+[[ -e "$xkb/rules/evdev" ]] || die "XKB data is missing ($xkb)"
+if [[ -L "$xkb" && "$(readlink "$xkb")" == /* ]]; then
+  ln -sfn "$(realpath --relative-to=/usr/share/X11 "$(readlink -f "$xkb")")" "$xkb"
+fi
+log "XKB: $xkb -> $(readlink "$xkb" || echo directory)"
 
 # The x11 backend and kiosk shell must exist, or Weston cannot run the session.
 x11_backend="$(find /usr/lib -name 'x11-backend.so' 2>/dev/null | head -n 1 || true)"
